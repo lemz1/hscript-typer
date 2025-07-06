@@ -1,0 +1,12 @@
+{
+  "name": "hscriptvalidator",
+  "url": "https://github.com/lemz1/hscript-validator",
+  "license": "MIT",
+  "description": "A simple validator for hscript.",
+  "version": "1.0.0",
+  "releasenote": "Initial release.",
+  "contributors": ["lemz1"],
+  "dependencies": {
+    "hscript": ""
+  }
+}

@@ -1,0 +1,6 @@
+-main hscript.validator.tests.RunTests
+-dce no
+-lib hscript
+-lib utest
+-D hscriptPos
+--interp
