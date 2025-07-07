@@ -15,7 +15,7 @@ class Test1 extends Test
       parser.allowTypes = true;
       var e = parser.parseString('
       var a:Float;
-      a = a + 5;
+      a = 15;
       ');
       var interp = new Interp();
       var validator = new Validator(interp);
