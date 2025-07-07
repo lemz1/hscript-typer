@@ -24,6 +24,7 @@ class Validator
   {
     locals.clear();
     declared = [];
+    cachedBlockTypes.clear();
     validateTypeof(e);
   }
 
