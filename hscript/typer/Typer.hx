@@ -8,6 +8,21 @@ import hscript.Expr;
 
 class Typer
 {
+  /**
+   * If the type of a variable could not be deduced, until it is used, it will fallback to `Dynamic`
+   */
+  public var variablesFallbackToDynamic:Bool = false;
+
+  /**
+   * If the type of a function argument is not given, it will fallback to `Dynamic`
+   */
+  public var argumentsFallbackToDynamic:Bool = false;
+
+  /**
+   * If the return type of a function is not given, it will fallback to `Dynamic`
+   */
+  public var returnsFallbackToDynamic:Bool = false;
+
   var interp:Interp;
   var locals:Map<String, CType>;
   var declared:Array<{n:String, old:Null<CType>}>;
@@ -41,6 +56,7 @@ class Typer
       case EIdent(v):
         var t:CType = if (locals.exists(v))
         {
+          if (isUnknown(locals.get(v)) && variablesFallbackToDynamic) locals.set(v, builtin('Dynamic'));
           locals.get(v);
         }
         else if (interp.variables.exists(v))
@@ -133,7 +149,7 @@ class Typer
           for (a in args)
             {
               name: a.name,
-              t: a.t ?? unknown(),
+              t: a.t ?? (argumentsFallbackToDynamic ? builtin('Dynamic') : unknown()),
               opt: a.opt,
               value: a.value != null ? typeExpr(a.value) : null
             }
@@ -143,7 +159,7 @@ class Typer
           add(ta.name, ta.t);
         var te1:TypedExpr = typeExpr(e1);
         restore(old);
-        var tret:CType = ret ?? unknown();
+        var tret:CType = ret ?? (returnsFallbackToDynamic ? builtin('Dynamic') : unknown());
         var t:CType = CTFun([for (ta in targs) ta.t], tret);
         return buildTypedExpr(e, TEFunction(targs, te1, name, tret), t);
       case EReturn(e1):

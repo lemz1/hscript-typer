@@ -73,7 +73,7 @@ class TypedExprTools
         for (i => a in args)
         {
           if (a.opt != null && a.opt) str += '?';
-          str += '${name}:${typeToString(a.t)}';
+          str += '${a.name}:${typeToString(a.t)}';
           if (a.value != null) str += ' = ${toString(a.value, printTypes)}';
           if (i != args.length - 1) str += ', ';
         }
