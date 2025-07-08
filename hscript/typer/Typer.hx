@@ -1,11 +1,11 @@
-package hscript.validator;
+package hscript.typer;
 
 import hscript.Printer;
 import hscript.Interp;
 import hscript.Tools;
 import hscript.Expr;
 
-class Validator
+class Typer
 {
   var interp:Interp;
   var locals:Map<String, CType>;
@@ -20,7 +20,7 @@ class Validator
     this.cachedBlockTypes = new Map<Expr, CType>();
   }
 
-  public function validate(e:Expr):Void
+  public function type(e:Expr):Void
   {
     locals.clear();
     declared = [];

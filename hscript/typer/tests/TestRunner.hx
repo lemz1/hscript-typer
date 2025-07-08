@@ -1,9 +1,9 @@
-package hscript.validator.tests;
+package hscript.typer.tests;
 
 import utest.Runner;
 import utest.ui.Report;
 
-class RunTests
+class TestRunner
 {
   public static function main()
   {

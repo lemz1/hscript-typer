@@ -1,4 +1,4 @@
-package hscript.validator.tests;
+package hscript.typer.tests;
 
 import utest.Test;
 import utest.Assert;
@@ -18,8 +18,8 @@ class Test1 extends Test
       a = 15;
       ');
       var interp = new Interp();
-      var validator = new Validator(interp);
-      validator.validate(e);
+      var typer = new Typer(interp);
+      typer.type(e);
       Assert.pass();
     }
     catch (e:String)

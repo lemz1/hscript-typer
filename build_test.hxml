@@ -1,4 +1,4 @@
--main hscript.validator.tests.RunTests
+-main hscript.typer.tests.TestRunner
 -dce no
 -lib hscript
 -lib utest
