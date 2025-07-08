@@ -1,5 +1,6 @@
 package hscript.typer;
 
+import hscript.typer.TypedExpr;
 import hscript.Printer;
 import hscript.Interp;
 import hscript.Tools;
@@ -10,297 +11,290 @@ class Typer
   var interp:Interp;
   var locals:Map<String, CType>;
   var declared:Array<{n:String, old:Null<CType>}>;
-  var cachedBlockTypes:Map<Expr, CType>;
 
   public function new(interp:Interp)
   {
     this.interp = interp;
     this.locals = new Map<String, CType>();
     this.declared = [];
-    this.cachedBlockTypes = new Map<Expr, CType>();
   }
 
-  public function type(e:Expr):Void
+  public function type(e:Expr):TypedExpr
   {
     locals.clear();
     declared = [];
-    cachedBlockTypes.clear();
-    validateTypeof(e);
+    return typeExpr(e);
   }
 
-  function validateTypeof(e:Expr):CType
-  {
-    switch (Tools.expr(e))
-    {
-      case EVar(n, t1, e1):
-        var t:Null<CType> = t1;
-        if (e1 != null)
-        {
-          var et:CType = validateTypeof(e1);
-          if (t != null && !equalType(et,
-            t) && !equalType(t,
-              builtin('Float')) && !equalType(et, builtin('Int'))) return error(e, 'Cannot assign ${typeToString(et)} to ${typeToString(t1)}');
-          else if (t == null) t = et;
-        }
-        if (t == null) return error(e, '${n} needs to have a type or be initialized');
-        add(n, t);
-      case EIdent(v):
-        if (!locals.exists(v) && !interp.variables.exists(v)) return error(e, '${v} does not exist');
-      case EParent(e1):
-        validateTypeof(e1);
-      case EBlock(exprs):
-        var old:Int = declared.length;
-        for (e1 in exprs)
-          validateTypeof(e1);
-        typeof(e); // cache block type
-        restore(old);
-      case EField(e1, f):
-        return error(e1, 'Will think about this later');
-      case EBinop(op, e1, e2):
-        var t1:CType = validateTypeof(e1);
-        var t2:CType = validateTypeof(e2);
-        if (!equalType(t1, t2))
-        {
-          if (['=', '+=', '-=', '*=', '/='].contains(op)) if (!equalType(t1,
-            builtin('Float')) || !equalType(t2,
-              builtin('Int'))) return error(e, 'operands are of different types: ${typeToString(t1)} ${op} ${typeToString(t2)}');
-          else if (['+', '-', '*', '/'].contains(op)) if ((!isNumerical(t1) || !isNumerical(t2))) return error(e,
-            'operands are of different types: ${typeToString(t1)} ${op} ${typeToString(t2)}');
-          else if (['<<', '>>'].contains(op)) if (t2 != builtin('Int')) return error(e, 'bitshift operator needs to be Int, but got ${typeToString(t2)}');
-          else
-            return error(e, 'operands are of different types: ${typeToString(t1)} ${op} ${typeToString(t2)}');
-        }
-      case ECall(e1, params):
-        var t:CType = validateTypeof(e1);
-        switch (t)
-        {
-          case CTFun(args, _):
-            if (params.length > args.length) return error(e, 'Call has too many arguments: expected ${args.length} but got ${params.length}');
-            for (i in 0...params.length)
-            {
-              var pt:CType = validateTypeof(params[i]);
-              if (!equalType(pt, args[i])
-                && !equalType(args[i], builtin('Float'))
-                && !equalType(pt, builtin('Int'))) return error(e, 'Got ${typeToString(pt)} but wants ${typeToString(args[i])}');
-            }
-          case CTPath(['Dynamic'], null):
-            // Dynamic will not be checked
-          default:
-            throw 'Should be a function type';
-        }
-      case EIf(cond, e1, e2):
-        var ct:CType = validateTypeof(cond);
-        if (!equalType(ct, builtin('Bool'))) return error(e, 'Condition must return a Bool');
-        // expr could not be a block, but still declare a local variable so we make sure to restore locals
-        var old:Int = declared.length;
-        validateTypeof(e1);
-        restore(old);
-        var old:Int = declared.length;
-        validateTypeof(e2);
-        restore(old);
-      case EWhile(cond, e1):
-        var ct:CType = validateTypeof(cond);
-        if (!equalType(ct, builtin('Bool'))) return error(e, 'Condition must return a Bool');
-        // expr could not be a block, but still declare a local variable so we make sure to restore locals
-        var old:Int = declared.length;
-        validateTypeof(e1);
-        restore(old);
-      case EFor(v, it, e1):
-        var old:Int = declared.length;
-        var itt:CType = typeof(it);
-        switch (itt)
-        {
-          case CTPath(['Array'], [p1]):
-            add(v, p1);
-          default:
-            var fields:Array<String> = Type.getInstanceFields(Type.resolveClass(typeToString(itt)));
-            if (!fields.contains('iterator') || !fields.contains('keyValueIterator')) return error(e, '${typeToString(itt)} needs to be iterable');
-            add(v, builtin('Dynamic'));
-        };
-        validateTypeof(e1);
-        restore(old);
-      case EFunction(args, e1, name, ret):
-        var targs:Array<CType> = [];
-        for (a in args)
-        {
-          if (a.t == null) return error(e, 'Function argument ${a.name} needs a type');
-          var t:CType = a.opt != null && a.opt ? CTOpt(a.t) : a.t;
-          targs.push(CTNamed(a.name, t));
-          add(a.name, t);
-        }
-        if (ret == null) return error(e, 'Function needs a return type');
-        var t:CType = CTFun(targs, ret);
-        add(name, t);
-        var old:Int = declared.length;
-        restore(old);
-      default:
-    }
-    return typeof(e);
-  }
-
-  function typeof(e:Expr):CType
+  function typeExpr(e:Expr):TypedExpr
   {
     switch (Tools.expr(e))
     {
       case EConst(c):
-        switch (c)
+        var t:CType = switch (c)
         {
-          case CInt(_):
-            return builtin('Int');
-          case CFloat(_):
-            return builtin('Float');
-          case CString(_):
-            return builtin('String');
+          case CInt(_): builtin('Int');
+          case CFloat(_): builtin('Float');
+          case CString(_): builtin('String');
         }
+        return buildTypedExpr(e, TEConst(c), t);
       case EIdent(v):
-        if (locals.exists(v)) return locals.get(v);
-        if (interp.variables.exists(v)) return builtin('Dynamic');
-        return error(e, '${v} does not exist');
-      case EVar(_, _, _):
-        return builtin('Void');
+        var t:CType = if (locals.exists(v))
+        {
+          locals.get(v);
+        }
+        else if (interp.variables.exists(v))
+        {
+          builtin('Dynamic');
+        }
+        else
+        {
+          unknown();
+        }
+        return buildTypedExpr(e, TEIdent(v), t);
+      case EVar(n, t, e1):
+        var te1:Null<TypedExpr> = e1 != null ? typeExpr(e1) : null;
+        add(n, t ?? te1?.t ?? unknown());
+        return buildTypedExpr(e, TEVar(n, t, te1), builtin('Void'));
       case EParent(e1):
-        return typeof(e1);
-      case EBlock(exprs):
-        if (cachedBlockTypes.exists(e)) return cachedBlockTypes.get(e);
-        if (exprs.length > 0)
-        {
-          var t:CType = typeof(exprs[exprs.length - 1]);
-          cachedBlockTypes.set(e, t);
-          return t;
-        }
-        return builtin('Void');
+        var te1:TypedExpr = typeExpr(e1);
+        return buildTypedExpr(e, TEParent(te1), te1.t);
+      case EBlock(es):
+        var old:Int = declared.length;
+        var tes:Array<TypedExpr> = [for (e1 in es) typeExpr(e1)];
+        var t:CType = tes.length > 0 ? tes[tes.length - 1].t : builtin('Void');
+        restore(old);
+        return buildTypedExpr(e, TEBlock(tes), t);
       case EField(e1, f):
-        return error(e1, 'Will think about this later');
+        var te1:TypedExpr = typeExpr(e1);
+        var t:CType = getFieldType(te1.t, f);
+        return buildTypedExpr(e, TEField(te1, f), t);
       case EBinop(op, e1, e2):
-        var t1:CType = typeof(e1);
-        var t2:CType = typeof(e2);
-        if (equalType(t1, t2)) return t1;
-        if (['=', '+=', '-=', '*=', '/='].contains(op) && equalType(t1, builtin('Float')) && equalType(t2, builtin('Int'))) return t1;
-        if (['+', '-', '*', '/'].contains(op) && isNumerical(t1) && isNumerical(t2)) return builtin('Float');
-        if (['<<', '>>'].contains(op))
+        var te1:TypedExpr = typeExpr(e1);
+        var te2:TypedExpr = typeExpr(e2);
+        if (op == '=' && isUnknown(te1.t))
         {
-          if (equalType(t2, builtin('Int'))) return t1;
-          return error(e, 'bitshift operator needs to be Int, but got ${typeToString(t2)}');
+          switch (te1.e)
+          {
+            case TEIdent(te1v):
+              if (locals.exists(te1v))
+              {
+                locals.set(te1v, te2.t);
+                te1.t = te2.t;
+              }
+            default:
+              throw 'Pretty sure this should not happen: ${te1.e}';
+          }
         }
-        return error(e, 'operands are of different types: ${typeToString(t1)} ${op} ${typeToString(t2)}');
-      case EUnop(_, _, e1):
-        return typeof(e1);
-      case ECall(e1, _):
-        var t:CType = typeof(e1);
-        switch (t)
+        var t:CType = commonType(te1.t, te2.t);
+        return buildTypedExpr(e, TEBinop(op, te1, te2), t);
+      case EUnop(op, prefix, e1):
+        var te1:TypedExpr = typeExpr(e1);
+        return buildTypedExpr(e, TEUnop(op, prefix, te1), te1.t);
+      case ECall(e1, params):
+        var te1:TypedExpr = typeExpr(e1);
+        var tparams:Array<TypedExpr> = [for (p in params) typeExpr(p)];
+        var t:CType = equalType(te1.t, builtin('Dynamic')) ? te1.t : switch (te1.t)
         {
-          case CTFun(_, ret):
-            return ret;
-          case CTPath(['Dynamic'], null):
-            return builtin('Dynamic');
-          default:
-            throw 'Should be a function type: ${e1}';
+          case CTFun(_, ret): ret;
+          default: unknown();
         }
-      case EIf(_, e1, e2):
-        var t1:CType = typeof(e1);
-        var t2:CType = typeof(e2);
-        if (equalType(t1, t2)) return t1;
-        return builtin('Dynamic');
-      case EWhile(_, _):
-        return builtin('Void');
-      case EFor(_, _, _):
-        return builtin('Void');
+        return buildTypedExpr(e, TECall(te1, tparams), t);
+      case EIf(cond, e1, e2):
+        var tcond:TypedExpr = typeExpr(cond);
+        var old:Int = declared.length;
+        var te1:TypedExpr = typeExpr(e1);
+        restore(old);
+        var old:Int = declared.length;
+        var te2:Null<TypedExpr> = e2 != null ? typeExpr(e2) : null;
+        restore(old);
+        var t:CType = te2 != null ? commonType(te1.t, te2.t) : te1.t;
+        return buildTypedExpr(e, TEIf(tcond, te1, te2), t);
+      case EWhile(cond, e1):
+        var tcond:TypedExpr = typeExpr(cond);
+        var old:Int = declared.length;
+        var te1:TypedExpr = typeExpr(e1);
+        restore(old);
+        return buildTypedExpr(e, TEWhile(tcond, te1), builtin('Void'));
+      case EFor(v, it, e1):
+        var old:Int = declared.length;
+        var tit:TypedExpr = typeExpr(it);
+        var vt:CType = getIterable(tit.t) ?? unknown();
+        add(v, vt);
+        var te1:TypedExpr = typeExpr(e1);
+        restore(old);
+        return buildTypedExpr(e, TEFor(v, tit, te1), te1.t);
       case EBreak:
-        return builtin('Void');
+        return buildTypedExpr(e, TEBreak, builtin('Void'));
       case EContinue:
-        return builtin('Void');
-      case EFunction(args, _, name, ret):
-        var targs:Array<CType> = [];
-        for (a in args)
-        {
-          if (a.t == null) return error(e, 'Function argument ${a.name} needs a type');
-          var t:CType = a.opt != null && a.opt ? CTOpt(a.t) : a.t;
-          targs.push(CTNamed(a.name, t));
-        }
-        if (ret == null) return error(e, 'Function needs a return type');
-        var t:CType = CTFun(targs, ret);
-        add(name, t);
-        return t;
+        return buildTypedExpr(e, TEContinue, builtin('Void'));
+      case EFunction(args, e1, name, ret):
+        var targs:Array<TypedArgument> = [
+          for (a in args)
+            {
+              name: a.name,
+              t: a.t ?? unknown(),
+              opt: a.opt,
+              value: a.value != null ? typeExpr(a.value) : null
+            }
+        ];
+        var old:Int = declared.length;
+        for (ta in targs)
+          add(ta.name, ta.t);
+        var te1:TypedExpr = typeExpr(e1);
+        restore(old);
+        var tret:CType = ret ?? unknown();
+        var t:CType = CTFun([for (ta in targs) ta.t], tret);
+        return buildTypedExpr(e, TEFunction(targs, te1, name, tret), t);
       case EReturn(e1):
-        if (e1 == null) return builtin('Void');
-        return typeof(e1);
-      case EArray(e1, _):
-        var t:CType = typeof(e1);
-        switch (t)
+        var te1:Null<TypedExpr> = e1 != null ? typeExpr(e1) : null;
+        var t:CType = te1.t ?? builtin('Void');
+        return buildTypedExpr(e, TEReturn(te1), t);
+      case EArray(e1, index):
+        var te1:TypedExpr = typeExpr(e1);
+        var tindex:TypedExpr = typeExpr(index);
+        var t:CType = getIterable(te1.t) ?? unknown();
+        return buildTypedExpr(e, TEArray(te1, tindex), t);
+      case EArrayDecl(es):
+        var tes:Array<TypedExpr> = [for (e1 in es) typeExpr(e1)];
+        var et:CType = builtin('Dynamic');
+        if (tes.length > 0)
         {
-          case CTPath(['Array'], [p]):
-            return p;
-          default:
-            throw 'Should be an Array type: ${e}';
+          var t:CType = tes[0].t;
+          for (i in 1...tes.length)
+            t = commonType(t, tes[i].t);
+          et = t;
         }
-      case EArrayDecl(exprs):
-        if (exprs.length == 0) return CTPath(['Array'], [CTPath(['?'], null)]);
-        var t:CType = typeof(exprs[0]);
-        for (e1 in exprs)
-        {
-          var t1:CType = typeof(e1);
-          if (equalType(t, t1))
-          {
-            if (isNumerical(t) && isNumerical(t1)) t = builtin('Float');
-            else
-              return CTPath(['Array'], [builtin('Dynamic')]);
-          }
-        }
-        return CTPath(['Array'], [t]);
-      case ENew(cl, _):
-        return CTPath([cl], null);
-      case EThrow(_):
-        return builtin('Void');
-      case ETry(e1, _, _, e2):
-        var t1:CType = typeof(e1);
-        var t2:CType = typeof(e2);
-        if (equalType(t1, t2)) return t1;
-        if (isNumerical(t1) && isNumerical(t2)) return builtin('Float');
-        return builtin('Dynamic');
+        var t:CType = CTPath(['Array'], [et]);
+        return buildTypedExpr(e, TEArrayDecl(tes), t);
+      case ENew(cl, params):
+        var tparams:Array<TypedExpr> = [for (p in params) typeExpr(p)];
+        return buildTypedExpr(e, TENew(cl, tparams), builtin('Dynamic'));
+      case EThrow(e1):
+        var te1:TypedExpr = typeExpr(e1);
+        return buildTypedExpr(e, TEThrow(te1), builtin('Void'));
+      case ETry(e1, v, t1, ecatch):
+        var te1:TypedExpr = typeExpr(e1);
+        var tecatch:TypedExpr = typeExpr(ecatch);
+        var t:CType = commonType(te1.t, tecatch.t);
+        return buildTypedExpr(e, TETry(te1, v, t1, tecatch), t);
       case EObject(fl):
-        return CTAnon([for (f in fl) {name: f.name, t: typeof(f.e)}]);
-      case ETernary(_, e1, e2):
-        var t1:CType = typeof(e1);
-        var t2:CType = typeof(e2);
-        if (equalType(t1, t2)) return t1;
-        if (isNumerical(t1) && isNumerical(t2)) return builtin('Float');
-        return builtin('Dynamic');
-      case ESwitch(_, cases, defaultExpr):
-        var t:CType = defaultExpr != null ? typeof(defaultExpr) : typeof(cases[0].expr);
-        var exprs = cases.copy();
-        for (c in exprs)
+        var tfl:Array<{name:String, e:TypedExpr}> = [for (f in fl) {name: f.name, e: typeExpr(e)}];
+        var t:CType = CTAnon([for (tf in tfl) {name: tf.name, t: tf.e.t}]);
+        return buildTypedExpr(e, TEObject(tfl), t);
+      case ETernary(cond, e1, e2):
+        var tcond:TypedExpr = typeExpr(cond);
+        var te1:TypedExpr = typeExpr(e1);
+        var te2:TypedExpr = typeExpr(e2);
+        var t:CType = commonType(te1.t, te2.t);
+        return buildTypedExpr(e, TETernary(tcond, te1, te2), t);
+      case ESwitch(e1, cases, defaultExpr):
+        var te1:TypedExpr = typeExpr(e1);
+        var tcases:Array<{values:Array<TypedExpr>, expr:TypedExpr}> = [
+          for (c in cases)
+            {
+              values: [for (v in c.values) typeExpr(v)],
+              expr: typeExpr(c.expr)
+            }
+        ];
+        var tdefaultExpr:Null<TypedExpr> = defaultExpr != null ? typeExpr(defaultExpr) : null;
+        var t:CType = builtin('Dynamic');
+        if (tdefaultExpr != null) t = tdefaultExpr.t;
+        if (tcases.length > 0)
         {
-          var t1:CType = typeof(c.expr);
-          if (equalType(t, t1))
-          {
-            if (isNumerical(t) && isNumerical(t1)) t = builtin('Float');
-            else
-              return builtin('Dynamic');
-          }
+          var ct:CType = tcases[0].expr.t;
+          for (i in 1...tcases.length)
+            ct = commonType(ct, tcases[i].expr.t);
+          t = ct;
         }
-        return t;
-      case EDoWhile(_, _):
-        return builtin('Void');
-      case EMeta(_, _, _):
-        return builtin('Void');
-      case ECheckType(_, t):
-        return t;
-      case EForGen(_, _):
-        return builtin('Void');
+        return buildTypedExpr(e, TESwitch(te1, tcases, tdefaultExpr), t);
+      case EDoWhile(cond, e1):
+        var tcond:TypedExpr = typeExpr(cond);
+        var te1:TypedExpr = typeExpr(e1);
+        return buildTypedExpr(e, TEDoWhile(tcond, te1), builtin('Void'));
+      case EMeta(name, args, e1):
+        var targs:Array<TypedExpr> = [for (a in args) typeExpr(a)];
+        var te1:TypedExpr = typeExpr(e1);
+        return buildTypedExpr(e, TEMeta(name, targs, te1), builtin('Void'));
+      case ECheckType(e1, t):
+        var te1:TypedExpr = typeExpr(e1);
+        return buildTypedExpr(e, TECheckType(te1, t), builtin('Void'));
+      case EForGen(it, e1):
+        var tit:TypedExpr = typeExpr(it);
+        var te1:TypedExpr = typeExpr(e1);
+        return buildTypedExpr(e, TEForGen(tit, te1), te1.t);
       default:
-        throw 'Expr not yet handled: ${e}';
+        return error(e, 'Expression not handled yet');
     }
   }
 
-  function isNumerical(t:CType):Bool
+  function getIterable(t:CType):Null<CType>
   {
     switch (t)
     {
-      case CTPath(['Int'], _) | CTPath(['Float'], _):
-        return true;
+      case CTPath(['Array'], [p]):
+        return p;
       default:
-        return false;
+        return null;
     }
+  }
+
+  function getFieldType(t:CType, f:String):CType
+  {
+    function _getFieldType(t:CType, f:String, instance:Bool):CType
+    {
+      switch (t)
+      {
+        case CTPath(path, _):
+          var dottedPath:String = path.join('.');
+          var cls:Class<Dynamic> = Type.resolveClass(dottedPath);
+          if (cls == null) return unknown();
+          var fs:Array<String> = instance ? Type.getInstanceFields(cls) : Type.getClassFields(cls);
+          if (!fs.contains(f)) return unknown();
+          return builtin('Dynamic');
+        default:
+          return unknown();
+      }
+    }
+
+    switch (t)
+    {
+      case CTPath(path, params):
+        var dottedPath:String = path.join('.');
+        if (dottedPath == 'Class') return _getFieldType(params[0], f, false);
+        return _getFieldType(t, f, true);
+      case CTParent(t1):
+        return getFieldType(t1, f);
+      case CTOpt(t1):
+        return getFieldType(t1, f);
+      case CTNamed(_, t1):
+        return getFieldType(t1, f);
+      default:
+        return unknown();
+    }
+  }
+
+  function commonType(t1:CType, t2:CType):CType
+  {
+    if (equalType(t1, t2)) return t1;
+    else if (isNumber(t1) && isNumber(t2)) return builtin('Float');
+    else
+      return builtin('Dynamic');
+  }
+
+  function isNumber(t:CType):Bool
+  {
+    return equalType(t, builtin('Int')) || equalType(t, builtin('Float'));
+  }
+
+  function isUnknown(t:CType):Bool
+  {
+    return equalType(t, unknown());
+  }
+
+  function unknown():CType
+  {
+    return builtin('?');
   }
 
   function equalType(t1:CType, t2:CType):Bool
@@ -317,14 +311,47 @@ class Typer
         if (ps1 != null && ps2 != null) for (i in 0...ps1.length)
           if (equalType(ps1[i], ps2[i])) return false;
         return true;
+      case [CTFun(args1, ret1), CTFun(args2, ret2)]:
+        if (args1.length != args2.length) return false;
+        if (!equalType(ret1, ret2)) return false;
+        for (i in 0...args1.length)
+          if (!equalType(args1[i], args2[i])) return false;
+        return true;
+      case [CTAnon(fields1), CTAnon(fields2)]:
+        if (fields1.length != fields2.length) return false;
+        for (i in 0...fields1.length)
+        {
+          if (fields1[i].name != fields2[i].name) return false;
+          if (fields1[i].t != fields2[i].t) return false;
+          if (fields1[i].meta != fields2[i].meta) return false;
+        }
+        return true;
+      case [CTParent(t1), CTParent(t2)]:
+        if (!equalType(t1, t2)) return false;
+        return true;
+      case [CTOpt(t1), CTOpt(t2)]:
+        if (!equalType(t1, t2)) return false;
+        return true;
+      case [CTNamed(n1, t1), CTNamed(n2, t2)]:
+        if (n1 != n2) return false;
+        if (!equalType(t1, t2)) return false;
+        return true;
+      case [CTExpr(e1), CTExpr(e2)]: // TODO
+        return false;
       default:
         return false;
     }
   }
 
-  function typeToString(t:CType):String
+  function buildTypedExpr(e:Expr, te:TypedExprDef, t:CType):TypedExpr
   {
-    return new Printer().typeToString(t);
+    return {
+      e: te,
+      t: t,
+      #if hscriptPos
+      pmin: e.pmin, pmax: e.pmax, origin: e.origin, line: e.line,
+      #end
+    };
   }
 
   function builtin(t:String):CType
@@ -353,6 +380,11 @@ class Typer
       else
         locals.remove(decl.n);
     }
+  }
+
+  function typeToString(t:CType):String
+  {
+    return new Printer().typeToString(t);
   }
 
   function error(e:Expr, m:String):Null<Dynamic>
