@@ -41,6 +41,154 @@ class Typer
     return typeExpr(e);
   }
 
+  public function validate(e:TypedExpr):Void
+  {
+    switch (e.e)
+    {
+      case TEConst(_):
+      case TEIdent(v):
+        if (isUnknown(e.t)) error(e, 'Local variable "${v}" used without being initialized');
+      case TEVar(n, t, e1):
+        if (e1 != null) validate(e1);
+        if (e1 != null && t != null && !equalType(t, e1.t) && !(isFloat(t) && isInt(e1.t)) && !(isDynamic(t) || isDynamic(e1.t)))
+        {
+          if (equalType(e1.t, CTPath(['Array'], [unknown()])))
+          {
+            switch (t)
+            {
+              case CTPath(['Array'], [_]):
+              default:
+                error(e1, '"${typeToString(e1.t)}" should be "${typeToString(t)}"');
+            }
+          }
+          else
+          {
+            error(e1, '"${typeToString(e1.t)}" should be "${typeToString(t)}"');
+          }
+        }
+        if (e1 != null && (t == null || (t != null && !isDynamic(t))))
+        {
+          if (isDynamic(e1.t))
+          {
+            switch (e1.e)
+            {
+              case TETernary(_, _, _) | TEIf(_, _, _):
+                if (t == null)
+                {
+                  error(e, 'Type of local variable "${n}" needs to be explicitly set to "Dynamic"');
+                }
+                else
+                {
+                  error(e1, '"Dynamic" should be "${typeToString(t)}"');
+                }
+              default:
+            }
+          }
+          else if (t == null && equalType(e1.t, CTPath(['Array'], [CTPath(['Dynamic'], null)])))
+          {
+            error(e, 'Type of local variable "${n}" needs to be explicitly set to "Array<Dynamic>"');
+          }
+        }
+      case TEParent(e1):
+        validate(e1);
+      case TEBlock(es):
+        for (e1 in es)
+          validate(e1);
+      case TEField(e1, f):
+        validate(e1);
+        if (isUnknown(e.t)) error(e, '"${typeToString(e1.t)}" has no field" ${f}"');
+      case TEBinop(op, e1, e2):
+        if (!equalType(e1.t, e2.t) && !(isDynamic(e1.t) || isDynamic(e2.t)))
+        {
+          if ((!isFloat(commonType(e1.t, e2.t))) || (['=', '+=', '-=', '*=', '/='].contains(op) && isInt(e1.t)))
+          {
+            error(e2, '"${typeToString(e2.t)}" should be "${typeToString(e1.t)}"');
+          }
+        }
+      case TEUnop(op, prefix, e1):
+        if (!isInt(e1.t)) error(e1, '"${typeToString(e1.t)}" should be "Int"');
+      case TECall(e1, params):
+        validate(e1);
+        for (p in params)
+          validate(p);
+      case TEIf(cond, e1, e2):
+        validate(cond);
+        if (isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
+        validate(e1);
+        validate(e2);
+      case TEWhile(cond, e1):
+        validate(cond);
+        if (isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
+        validate(e1);
+      case TEFor(v, it, e1):
+        validate(it);
+        validate(e1);
+      case TEBreak:
+      case TEContinue:
+      case TEFunction(args, e1, name, ret):
+        for (a in args)
+          if (isUnknown(a.t)) error(e, 'Argument "${a.name}" needs to have a type');
+        if (ret == null || isUnknown(ret)) error(e, 'Function${name != null ? ' "${name}"' : ''} needs a return type');
+        validate(e1);
+      case TEReturn(e1):
+        if (e1 != null) validate(e1);
+      case TEArray(e1, index):
+        validate(e1);
+        validate(index);
+      case TEArrayDecl(es):
+        for (e1 in es)
+          validate(e1);
+      case TENew(cl, params):
+        var cls:Class<Dynamic> = Type.resolveClass(cl);
+        if (cls == null) error(e, 'Class "${cl}" does not exist');
+        for (p in params)
+          validate(p);
+      case TEThrow(e1):
+        validate(e1);
+      case TETry(e1, v, t, ecatch):
+        validate(e1);
+        if (t == null || isUnknown(t)) error(e, 'Caught error "${v}" needs to have a type');
+        validate(ecatch);
+      case TEObject(fl):
+        for (f in fl)
+          validate(f.e);
+      case TETernary(cond, e1, e2):
+        validate(cond);
+        if (isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
+        validate(e1);
+        validate(e2);
+      case TESwitch(e1, cases, defaultExpr):
+        validate(e1);
+        for (c in cases)
+        {
+          for (v in c.values)
+          {
+            validate(v);
+            if (!equalType(e1.t, v.t) && (!isFloat(e1.t) && !isInt(v.t)) && (!isDynamic(e1.t) || !isDynamic(v.t)))
+            {
+              error(v, '"${typeToString(v.t)}" should be "${typeToString(e1.t)}"');
+            }
+          }
+          validate(c.expr);
+        }
+        if (defaultExpr != null) validate(defaultExpr);
+      case TEDoWhile(cond, e1):
+        validate(cond);
+        if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
+        validate(e1);
+      case TEMeta(name, args, e1):
+        for (a in args)
+          validate(a);
+        validate(e1);
+      case TECheckType(e1, t):
+        validate(e1);
+        if (!equalType(e1.t, t)) error(e, '"${typeToString(e1.t)}" should be "${typeToString(t)}"');
+      case TEForGen(it, e1):
+        validate(it);
+        validate(e1);
+    }
+  }
+
   function typeExpr(e:Expr):TypedExpr
   {
     switch (Tools.expr(e))
@@ -61,7 +209,9 @@ class Typer
         }
         else if (interp.variables.exists(v))
         {
-          builtin('Dynamic');
+          if (['true', 'false'].contains(v)) builtin('Bool');
+          else
+            builtin('Dynamic');
         }
         else
         {
@@ -102,7 +252,7 @@ class Typer
               throw 'Pretty sure this should not happen: ${te1.e}';
           }
         }
-        var t:CType = commonType(te1.t, te2.t);
+        var t:CType = ['==', '!='].contains(op) ? builtin('Bool') : commonType(te1.t, te2.t);
         return buildTypedExpr(e, TEBinop(op, te1, te2), t);
       case EUnop(op, prefix, e1):
         var te1:TypedExpr = typeExpr(e1);
@@ -173,7 +323,7 @@ class Typer
         return buildTypedExpr(e, TEArray(te1, tindex), t);
       case EArrayDecl(es):
         var tes:Array<TypedExpr> = [for (e1 in es) typeExpr(e1)];
-        var et:CType = builtin('Dynamic');
+        var et:CType = unknown();
         if (tes.length > 0)
         {
           var t:CType = tes[0].t;
@@ -239,8 +389,6 @@ class Typer
         var tit:TypedExpr = typeExpr(it);
         var te1:TypedExpr = typeExpr(e1);
         return buildTypedExpr(e, TEForGen(tit, te1), te1.t);
-      default:
-        return error(e, 'Expression not handled yet');
     }
   }
 
@@ -303,6 +451,26 @@ class Typer
     return equalType(t, builtin('Int')) || equalType(t, builtin('Float'));
   }
 
+  function isDynamic(t:CType):Bool
+  {
+    return equalType(t, builtin('Dynamic'));
+  }
+
+  function isFloat(t:CType):Bool
+  {
+    return equalType(t, builtin('Float'));
+  }
+
+  function isInt(t:CType):Bool
+  {
+    return equalType(t, builtin('Int'));
+  }
+
+  function isBool(t:CType):Bool
+  {
+    return equalType(t, builtin('Bool'));
+  }
+
   function isUnknown(t:CType):Bool
   {
     return equalType(t, unknown());
@@ -325,7 +493,7 @@ class Typer
         for (i in 0...p1.length)
           if (p1[i] != p2[i]) return false;
         if (ps1 != null && ps2 != null) for (i in 0...ps1.length)
-          if (equalType(ps1[i], ps2[i])) return false;
+          if (!equalType(ps1[i], ps2[i])) return false;
         return true;
       case [CTFun(args1, ret1), CTFun(args2, ret2)]:
         if (args1.length != args2.length) return false;
@@ -403,13 +571,12 @@ class Typer
     return new Printer().typeToString(t);
   }
 
-  function error(e:Expr, m:String):Null<Dynamic>
+  function error(e:TypedExpr, m:String):Dynamic
   {
     #if hscriptPos
     throw '${e.origin}: ${e.line}: ${m}';
     #else
-    throw 'hscript-validator: ${m}';
+    throw 'hscript-typer: ${m}';
     #end
-    return null;
   }
 }

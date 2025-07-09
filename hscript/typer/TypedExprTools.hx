@@ -118,8 +118,6 @@ class TypedExprTools
         str += '${toString(e1, printTypes)}:${typeToString(t)}';
       case TEForGen(it, e1):
         str += 'for (${toString(it, printTypes)}) ${toString(e1, printTypes)}';
-      default:
-        return '<invalid>';
     }
     return printTypes ? '(${typeToString(e.t)}: ${str})' : str;
   }
