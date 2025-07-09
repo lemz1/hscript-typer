@@ -20,7 +20,7 @@ class TypedExprTools
           case CFloat(f):
             str += '${f}';
           case CString(s):
-            str += s;
+            str += '"${s}"';
         }
       case TEIdent(v):
         str += v;
@@ -55,7 +55,7 @@ class TypedExprTools
         str += [for (p in params) toString(p, printTypes)].join(', ');
         str += ')';
       case TEIf(cond, e1, e2):
-        str += 'if (${toString(cond, printTypes)})';
+        str += 'if (${toString(cond, printTypes)}) ';
         str += toString(e1, printTypes);
         if (e2 != null) str += ' else ${toString(e2, printTypes)}';
       case TEWhile(cond, e1):
@@ -97,7 +97,7 @@ class TypedExprTools
         if (t != null) str += ':${typeToString(t)}';
         str += ') ${toString(ecatch, printTypes)}';
       case TEObject(fl):
-        str += '{\n${[for (f in fl) '${f.name}: ${toString(f.e, printTypes)}'].join(',\n')}\n}';
+        str += '{\n${applyTab([for (f in fl) '${f.name}: ${toString(f.e, printTypes)}'].join(',\n'))}\n}';
       case TETernary(cond, e1, e2):
         str += '${toString(cond, printTypes)} ? ${toString(e1, printTypes)} : ${toString(e2, printTypes)}';
       case TESwitch(e1, cases, defaultExpr):
