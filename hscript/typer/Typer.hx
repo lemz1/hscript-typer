@@ -113,12 +113,12 @@ class Typer
           validate(p);
       case TEIf(cond, e1, e2):
         validate(cond);
-        if (isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
+        if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
         validate(e1);
         validate(e2);
       case TEWhile(cond, e1):
         validate(cond);
-        if (isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
+        if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
         validate(e1);
       case TEFor(v, it, e1):
         validate(it);
@@ -154,7 +154,7 @@ class Typer
           validate(f.e);
       case TETernary(cond, e1, e2):
         validate(cond);
-        if (isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
+        if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
         validate(e1);
         validate(e2);
       case TESwitch(e1, cases, defaultExpr):
@@ -345,7 +345,7 @@ class Typer
         var t:CType = commonType(te1.t, tecatch.t);
         return buildTypedExpr(e, TETry(te1, v, t1, tecatch), t);
       case EObject(fl):
-        var tfl:Array<{name:String, e:TypedExpr}> = [for (f in fl) {name: f.name, e: typeExpr(e)}];
+        var tfl:Array<{name:String, e:TypedExpr}> = [for (f in fl) {name: f.name, e: typeExpr(f.e)}];
         var t:CType = CTAnon([for (tf in tfl) {name: tf.name, t: tf.e.t}]);
         return buildTypedExpr(e, TEObject(tfl), t);
       case ETernary(cond, e1, e2):
