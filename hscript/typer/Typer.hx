@@ -571,12 +571,53 @@ class Typer
     return new Printer().typeToString(t);
   }
 
-  function error(e:TypedExpr, m:String):Dynamic
+  function error(e:TypedExpr, m:String):Void
   {
     #if hscriptPos
-    throw '${e.origin}: ${e.line}: ${m}';
+    throw new TyperError(m, e.origin, e.line, e.pmin, e.pmax);
     #else
-    throw 'hscript-typer: ${m}';
+    throw new TyperError(m);
     #end
+  }
+}
+
+class TyperError extends haxe.Exception
+{
+  public var origin(default, null):Null<String>;
+  public var line(default, null):Null<Int>;
+  public var pmin(default, null):Null<Int>;
+  public var pmax(default, null):Null<Int>;
+
+  public function new(message:String, ?origin:String, ?line:Int, ?pmin:Int, ?pmax:Int)
+  {
+    super(message);
+    this.origin = origin;
+    this.line = line;
+    this.pmin = pmin;
+    this.pmax = pmax;
+  }
+
+  override public function toString():String
+  {
+    if (origin == null || line == null || pmin == null || pmax == null) return message;
+    #if sys
+    if (sys.FileSystem.exists(origin) && !sys.FileSystem.isDirectory(origin))
+    {
+      var content:String = sys.io.File.getContent(origin);
+      var lineIndex:Int = 0;
+      var startPos:Int = 0;
+      var length:Int = pmax - pmin;
+      for (i in 0...content.length)
+      {
+        if (lineIndex == line - 1 && content.split('\n')[lineIndex].substr(startPos++, length) == content.substr(pmin, length)) break;
+        if (content.charAt(i) == '\n') lineIndex++;
+      }
+      return '${origin}:${line}: characters ${startPos}:${startPos + length} : ${message}';
+    }
+    else
+    #end
+    {
+      return '${origin}:${line}: characters ${pmin}-${pmax} : ${message}';
+    }
   }
 }

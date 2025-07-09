@@ -1,32 +1,37 @@
 package hscript.typer.tests;
 
 import utest.Test;
-import utest.Assert;
-import hscript.Interp;
 import hscript.Parser;
+import hscript.Interp;
+import hscript.typer.Typer;
+import utest.Assert;
 
-class Test1 extends Test
+class Test006 extends Test
 {
   public function test():Void
+  {
+    var code = "
+      var arr:Array<Int> = [1, 2, 3];
+    ";
+    assertPass(code);
+  }
+
+  function assertPass(code:String)
   {
     try
     {
       var parser = new Parser();
       parser.allowTypes = true;
-      var e = parser.parseString('
-      var a = 50;
-      var b = 30.0;
-      a == b;
-      ');
+      var e = parser.parseString(code);
       var interp = new Interp();
       var typer = new Typer(interp);
       var te = typer.type(e);
       typer.validate(te);
       Assert.pass();
     }
-    catch (e:String)
+    catch (e:TyperError)
     {
-      Assert.fail(e);
+      Assert.fail(e.message);
     }
   }
 }
