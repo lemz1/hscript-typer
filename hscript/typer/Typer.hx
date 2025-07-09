@@ -6,6 +6,8 @@ import hscript.Interp;
 import hscript.Tools;
 import hscript.Expr;
 
+using StringTools;
+
 class Typer
 {
   /**
@@ -40,6 +42,8 @@ class Typer
     declared = [];
     return typeExpr(e);
   }
+
+  var canBreakOrContinue:Bool = false;
 
   public function validate(e:TypedExpr):Void
   {
@@ -98,6 +102,8 @@ class Typer
         validate(e1);
         if (isUnknown(e.t)) error(e, '"${typeToString(e1.t)}" has no field" ${f}"');
       case TEBinop(op, e1, e2):
+        validate(e1);
+        validate(e2);
         if (!equalType(e1.t, e2.t) && !(isDynamic(e1.t) || isDynamic(e2.t)))
         {
           if ((!isFloat(commonType(e1.t, e2.t))) || (['=', '+=', '-=', '*=', '/='].contains(op) && isInt(e1.t)))
@@ -106,11 +112,36 @@ class Typer
           }
         }
       case TEUnop(op, prefix, e1):
+        validate(e1);
         if (!isInt(e1.t)) error(e1, '"${typeToString(e1.t)}" should be "Int"');
       case TECall(e1, params):
         validate(e1);
-        for (p in params)
-          validate(p);
+        switch (e1.t)
+        {
+          case CTFun(args, _):
+            var requiredArgs:Int = 0;
+            for (a in args)
+            {
+              switch (a)
+              {
+                case CTOpt(_):
+                default:
+                  requiredArgs++;
+              }
+            }
+            if (params.length < requiredArgs) error(e, 'Expected atleast ${requiredArgs} argument(s) but got ${params.length}');
+            else if (params.length > args.length) error(e, 'Expected ${args.length} argument(s) but got ${params.length}');
+            for (i in 0...params.length)
+            {
+              validate(params[i]);
+              if (!equalType(params[i].t, args[i])
+                && !(isFloat(args[i]) && isInt(params[i].t))
+                && !(isDynamic(params[i].t) || isDynamic(args[i]))) error(params[i], '"${typeToString(params[i].t)}" should be "${typeToString(args[i])}"');
+            }
+          default:
+            for (p in params)
+              validate(p);
+        }
       case TEIf(cond, e1, e2):
         validate(cond);
         if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
@@ -118,18 +149,26 @@ class Typer
         validate(e2);
       case TEWhile(cond, e1):
         validate(cond);
+        canBreakOrContinue = true;
         if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
         validate(e1);
+        canBreakOrContinue = false;
       case TEFor(v, it, e1):
         validate(it);
+        canBreakOrContinue = true;
         validate(e1);
+        canBreakOrContinue = false;
       case TEBreak:
+        if (!canBreakOrContinue) error(e, 'Break outside loop');
       case TEContinue:
+        if (!canBreakOrContinue) error(e, 'Continue outside loop');
       case TEFunction(args, e1, name, ret):
         for (a in args)
           if (isUnknown(a.t)) error(e, 'Argument "${a.name}" needs to have a type');
         if (ret == null || isUnknown(ret)) error(e, 'Function${name != null ? ' "${name}"' : ''} needs a return type');
         validate(e1);
+        if (!equalType(e1.t,
+          ret) && !(isFloat(ret) && isInt(e1.t)) && !(isDynamic(e1.t) || isDynamic(ret))) error(e1, '"${typeToString(e1.t)}" should be "${typeToString(ret)}"');
       case TEReturn(e1):
         if (e1 != null) validate(e1);
       case TEArray(e1, index):
@@ -174,8 +213,10 @@ class Typer
         if (defaultExpr != null) validate(defaultExpr);
       case TEDoWhile(cond, e1):
         validate(cond);
+        canBreakOrContinue = true;
         if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
         validate(e1);
+        canBreakOrContinue = false;
       case TEMeta(name, args, e1):
         for (a in args)
           validate(a);
@@ -604,15 +645,17 @@ class TyperError extends haxe.Exception
     if (sys.FileSystem.exists(origin) && !sys.FileSystem.isDirectory(origin))
     {
       var content:String = sys.io.File.getContent(origin);
+      var absolutePos:Int = 0;
       var lineIndex:Int = 0;
-      var startPos:Int = 0;
-      var length:Int = pmax - pmin;
       for (i in 0...content.length)
       {
-        if (lineIndex == line - 1 && content.split('\n')[lineIndex].substr(startPos++, length) == content.substr(pmin, length)) break;
-        if (content.charAt(i) == '\n') lineIndex++;
+        if (lineIndex == line - 1) break;
+        if (content.charAt(absolutePos++) == '\n') lineIndex++;
       }
-      return '${origin}:${line}: characters ${startPos}:${startPos + length} : ${message}';
+      var relativePos:Int = pmin - absolutePos;
+      var length:Int = pmax - pmin;
+      var squigglyLine:String = ''.rpad(' ', relativePos).rpad('~', relativePos + length + 1);
+      return '${origin}:${line}: characters ${relativePos + 1}-${relativePos + length + 1} : ${message}\n${content.split('\n')[lineIndex]}\n${squigglyLine}';
     }
     else
     #end
