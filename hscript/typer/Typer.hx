@@ -29,23 +29,56 @@ class Typer
   var locals:Map<String, CType>;
   var declared:Array<{n:String, old:Null<CType>}>;
 
+  var code:Null<String>;
+
   public function new(interp:Interp)
   {
     this.interp = interp;
     this.locals = new Map<String, CType>();
     this.declared = [];
+    this.code = null;
   }
 
+  /**
+   * Types the given expression and returns it
+   * @param e The expression to type
+   * @return The typed expression
+   */
   public function type(e:Expr):TypedExpr
   {
-    locals.clear();
-    declared = [];
-    return typeExpr(e);
+    var t:TypedExpr = typeExpr(e);
+    this.locals.clear();
+    this.declared = [];
+    return t;
   }
+
+  /**
+   * Types the given modules
+   * @param modules An array of modules to type
+   */
+  public function typeModules(modules:Array<TyperModule>):Void {}
+
+  /**
+   * Checks whether typing errors occur in the given module
+   * @param code The code for better error messages
+   */
+  public function validateModules(?code:String):Void {}
 
   var canBreakOrContinue:Bool = false;
 
-  public function validate(e:TypedExpr):Void
+  /**
+   * Checks whether typing errors occur in the given expression
+   * @param e The typed expression to validate
+   * @param code The code for better error messages
+   */
+  public function validate(e:TypedExpr, ?code:String):Void
+  {
+    this.code = code;
+    validateExpr(e);
+    this.code = null;
+  }
+
+  function validateExpr(e:TypedExpr):Void
   {
     switch (e.e)
     {
@@ -53,7 +86,7 @@ class Typer
       case TEIdent(v):
         if (isUnknown(e.t)) error(e, 'Local variable "${v}" used without being initialized');
       case TEVar(n, t, e1):
-        if (e1 != null) validate(e1);
+        if (e1 != null) validateExpr(e1);
         if (e1 != null && t != null && !equalType(t, e1.t) && !(isFloat(t) && isInt(e1.t)) && !(isDynamic(t) || isDynamic(e1.t)))
         {
           if (equalType(e1.t, CTPath(['Array'], [unknown()])))
@@ -94,16 +127,16 @@ class Typer
           }
         }
       case TEParent(e1):
-        validate(e1);
+        validateExpr(e1);
       case TEBlock(es):
         for (e1 in es)
-          validate(e1);
+          validateExpr(e1);
       case TEField(e1, f):
-        validate(e1);
+        validateExpr(e1);
         if (isUnknown(e.t)) error(e, '"${typeToString(e1.t)}" has no field" ${f}"');
       case TEBinop(op, e1, e2):
-        validate(e1);
-        validate(e2);
+        validateExpr(e1);
+        validateExpr(e2);
         if (!equalType(e1.t, e2.t) && !(isDynamic(e1.t) || isDynamic(e2.t)))
         {
           if ((!isFloat(commonType(e1.t, e2.t))) || (['=', '+=', '-=', '*=', '/='].contains(op) && isInt(e1.t)))
@@ -112,10 +145,10 @@ class Typer
           }
         }
       case TEUnop(op, prefix, e1):
-        validate(e1);
+        validateExpr(e1);
         if (!isInt(e1.t)) error(e1, '"${typeToString(e1.t)}" should be "Int"');
       case TECall(e1, params):
-        validate(e1);
+        validateExpr(e1);
         switch (e1.t)
         {
           case CTFun(args, _):
@@ -133,30 +166,30 @@ class Typer
             else if (params.length > args.length) error(e, 'Expected ${args.length} argument(s) but got ${params.length}');
             for (i in 0...params.length)
             {
-              validate(params[i]);
+              validateExpr(params[i]);
               if (!equalType(params[i].t, args[i])
                 && !(isFloat(args[i]) && isInt(params[i].t))
                 && !(isDynamic(params[i].t) || isDynamic(args[i]))) error(params[i], '"${typeToString(params[i].t)}" should be "${typeToString(args[i])}"');
             }
           default:
             for (p in params)
-              validate(p);
+              validateExpr(p);
         }
       case TEIf(cond, e1, e2):
-        validate(cond);
+        validateExpr(cond);
         if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
-        validate(e1);
-        validate(e2);
+        validateExpr(e1);
+        validateExpr(e2);
       case TEWhile(cond, e1):
-        validate(cond);
+        validateExpr(cond);
         canBreakOrContinue = true;
         if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
-        validate(e1);
+        validateExpr(e1);
         canBreakOrContinue = false;
       case TEFor(v, it, e1):
-        validate(it);
+        validateExpr(it);
         canBreakOrContinue = true;
-        validate(e1);
+        validateExpr(e1);
         canBreakOrContinue = false;
       case TEBreak:
         if (!canBreakOrContinue) error(e, 'Break outside loop');
@@ -166,67 +199,67 @@ class Typer
         for (a in args)
           if (isUnknown(a.t)) error(e, 'Argument "${a.name}" needs to have a type');
         if (ret == null || isUnknown(ret)) error(e, 'Function${name != null ? ' "${name}"' : ''} needs a return type');
-        validate(e1);
+        validateExpr(e1);
         if (!equalType(e1.t,
           ret) && !(isFloat(ret) && isInt(e1.t)) && !(isDynamic(e1.t) || isDynamic(ret))) error(e1, '"${typeToString(e1.t)}" should be "${typeToString(ret)}"');
       case TEReturn(e1):
-        if (e1 != null) validate(e1);
+        if (e1 != null) validateExpr(e1);
       case TEArray(e1, index):
-        validate(e1);
-        validate(index);
+        validateExpr(e1);
+        validateExpr(index);
       case TEArrayDecl(es):
         for (e1 in es)
-          validate(e1);
+          validateExpr(e1);
       case TENew(cl, params):
         var cls:Class<Dynamic> = Type.resolveClass(cl);
         if (cls == null) error(e, 'Class "${cl}" does not exist');
         for (p in params)
-          validate(p);
+          validateExpr(p);
       case TEThrow(e1):
-        validate(e1);
+        validateExpr(e1);
       case TETry(e1, v, t, ecatch):
-        validate(e1);
+        validateExpr(e1);
         if (t == null || isUnknown(t)) error(e, 'Caught error "${v}" needs to have a type');
-        validate(ecatch);
+        validateExpr(ecatch);
       case TEObject(fl):
         for (f in fl)
-          validate(f.e);
+          validateExpr(f.e);
       case TETernary(cond, e1, e2):
-        validate(cond);
+        validateExpr(cond);
         if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
-        validate(e1);
-        validate(e2);
+        validateExpr(e1);
+        validateExpr(e2);
       case TESwitch(e1, cases, defaultExpr):
-        validate(e1);
+        validateExpr(e1);
         for (c in cases)
         {
           for (v in c.values)
           {
-            validate(v);
+            validateExpr(v);
             if (!equalType(e1.t, v.t) && (!isFloat(e1.t) && !isInt(v.t)) && (!isDynamic(e1.t) || !isDynamic(v.t)))
             {
               error(v, '"${typeToString(v.t)}" should be "${typeToString(e1.t)}"');
             }
           }
-          validate(c.expr);
+          validateExpr(c.expr);
         }
-        if (defaultExpr != null) validate(defaultExpr);
+        if (defaultExpr != null) validateExpr(defaultExpr);
       case TEDoWhile(cond, e1):
-        validate(cond);
+        validateExpr(cond);
         canBreakOrContinue = true;
         if (!isBool(cond.t)) error(cond, '"${typeToString(cond.t)}" should be "Bool"');
-        validate(e1);
+        validateExpr(e1);
         canBreakOrContinue = false;
       case TEMeta(name, args, e1):
         for (a in args)
-          validate(a);
-        validate(e1);
+          validateExpr(a);
+        validateExpr(e1);
       case TECheckType(e1, t):
-        validate(e1);
+        validateExpr(e1);
         if (!equalType(e1.t, t)) error(e, '"${typeToString(e1.t)}" should be "${typeToString(t)}"');
       case TEForGen(it, e1):
-        validate(it);
-        validate(e1);
+        validateExpr(it);
+        validateExpr(e1);
     }
   }
 
@@ -615,7 +648,7 @@ class Typer
   function error(e:TypedExpr, m:String):Void
   {
     #if hscriptPos
-    throw new TyperError(m, e.origin, e.line, e.pmin, e.pmax);
+    throw new TyperError(m, e.origin, e.line, e.pmin, e.pmax, code);
     #else
     throw new TyperError(m);
     #end
@@ -628,39 +661,40 @@ class TyperError extends haxe.Exception
   public var line(default, null):Null<Int>;
   public var pmin(default, null):Null<Int>;
   public var pmax(default, null):Null<Int>;
+  public var code(default, null):Null<String>;
 
-  public function new(message:String, ?origin:String, ?line:Int, ?pmin:Int, ?pmax:Int)
+  public function new(message:String, ?origin:String, ?line:Int, ?pmin:Int, ?pmax:Int, ?code:String)
   {
     super(message);
     this.origin = origin;
     this.line = line;
     this.pmin = pmin;
     this.pmax = pmax;
+    this.code = code;
   }
 
   override public function toString():String
   {
     if (origin == null || line == null || pmin == null || pmax == null) return message;
-    #if sys
-    if (sys.FileSystem.exists(origin) && !sys.FileSystem.isDirectory(origin))
+    if (code != null)
     {
-      var content:String = sys.io.File.getContent(origin);
       var absolutePos:Int = 0;
       var lineIndex:Int = 0;
-      for (i in 0...content.length)
+      for (i in 0...code.length)
       {
         if (lineIndex == line - 1) break;
-        if (content.charAt(absolutePos++) == '\n') lineIndex++;
+        if (code.charAt(absolutePos++) == '\n') lineIndex++;
       }
       var relativePos:Int = pmin - absolutePos;
       var length:Int = pmax - pmin;
       var squigglyLine:String = ''.rpad(' ', relativePos).rpad('~', relativePos + length + 1);
-      return '${origin}:${line}: characters ${relativePos + 1}-${relativePos + length + 1} : ${message}\n${content.split('\n')[lineIndex]}\n${squigglyLine}';
+      return '${origin}:${line}: characters ${relativePos + 1}-${relativePos + length + 1} : ${message}\n${code.split('\n')[lineIndex]}\n${squigglyLine}';
     }
     else
-    #end
     {
       return '${origin}:${line}: characters ${pmin}-${pmax} : ${message}';
     }
   }
 }
+
+typedef TyperModule = Array<ModuleDecl>;

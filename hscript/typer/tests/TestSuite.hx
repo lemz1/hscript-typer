@@ -34,8 +34,6 @@ class TestSuite extends Test
 
   function assertPass(code:String):Void
   {
-    static var currentTest:Int = 0;
-    currentTest++;
     try
     {
       var parser = new Parser();
@@ -44,12 +42,12 @@ class TestSuite extends Test
       var interp = new Interp();
       var typer = new Typer(interp);
       var te = typer.type(e);
-      typer.validate(te);
+      typer.validate(te, code);
       Assert.pass();
     }
     catch (e:TyperError)
     {
-      Assert.fail('Test ${currentTest}: ${e.toString()}');
+      Assert.fail(e.toString());
     }
   }
 }

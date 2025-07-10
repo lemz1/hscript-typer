@@ -9,6 +9,7 @@ class TestRunner
   {
     var runner = new Runner();
     runner.addCase(new TestSuite());
+    runner.addCase(new TestSuiteModules());
     Report.create(runner);
     runner.run();
   }
