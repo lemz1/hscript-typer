@@ -98,7 +98,7 @@ class Typer
                 error(e1, '"${typeToString(e1.t)}" should be "${typeToString(t)}"');
             }
           }
-          else
+          else if (!isNull(t) && isNull(e1.t))
           {
             error(e1, '"${typeToString(e1.t)}" should be "${typeToString(t)}"');
           }
@@ -139,7 +139,8 @@ class Typer
         validateExpr(e2);
         if (!equalType(e1.t, e2.t) && !(isDynamic(e1.t) || isDynamic(e2.t)))
         {
-          if ((!isFloat(commonType(e1.t, e2.t))) || (['=', '+=', '-=', '*=', '/='].contains(op) && isInt(e1.t)))
+          if ((!isFloat(commonType(e1.t, e2.t)) && !equalType(getNullInner(e1.t), getNullInner(e2.t)))
+            || (['=', '+=', '-=', '*=', '/='].contains(op) && (isInt(e1.t) || (!isNull(e1.t) && isNull(e2.t)))))
           {
             error(e2, '"${typeToString(e2.t)}" should be "${typeToString(e1.t)}"');
           }
@@ -276,16 +277,22 @@ class Typer
         }
         return buildTypedExpr(e, TEConst(c), t);
       case EIdent(v):
-        var t:CType = if (locals.exists(v))
+        var t:CType = if (['true', 'false'].contains(v))
+        {
+          builtin('Bool');
+        }
+        else if (v == 'null')
+        {
+          CTPath(['Null'], [unknown()]);
+        }
+        else if (locals.exists(v))
         {
           if (isUnknown(locals.get(v)) && variablesFallbackToDynamic) locals.set(v, builtin('Dynamic'));
           locals.get(v);
         }
         else if (interp.variables.exists(v))
         {
-          if (['true', 'false'].contains(v)) builtin('Bool');
-          else
-            builtin('Dynamic');
+          builtin('Dynamic');
         }
         else
         {
@@ -294,6 +301,7 @@ class Typer
         return buildTypedExpr(e, TEIdent(v), t);
       case EVar(n, t, e1):
         var te1:Null<TypedExpr> = e1 != null ? typeExpr(e1) : null;
+        if (t != null && isNullUnknown(te1.t)) te1.t = buildNull(t);
         add(n, t ?? te1?.t ?? unknown());
         return buildTypedExpr(e, TEVar(n, t, te1), builtin('Void'));
       case EParent(e1):
@@ -312,20 +320,23 @@ class Typer
       case EBinop(op, e1, e2):
         var te1:TypedExpr = typeExpr(e1);
         var te2:TypedExpr = typeExpr(e2);
-        if (op == '=' && isUnknown(te1.t))
+        if (op == '=' && (isUnknown(te1.t) || isNullUnknown(te1.t)))
         {
           switch (te1.e)
           {
             case TEIdent(te1v):
               if (locals.exists(te1v))
               {
-                locals.set(te1v, te2.t);
-                te1.t = te2.t;
+                var t:CType = isNullUnknown(te1.t) ? buildNull(te2.t) : te2.t;
+                locals.set(te1v, t);
+                te1.t = t;
               }
             default:
               throw 'Pretty sure this should not happen: ${te1.e}';
           }
         }
+        if (isNullUnknown(te1.t)) te1.t = buildNull(te2.t);
+        else if (isNullUnknown(te2.t)) te2.t = buildNull(te1.t);
         var t:CType = ['==', '!='].contains(op) ? builtin('Bool') : commonType(te1.t, te2.t);
         return buildTypedExpr(e, TEBinop(op, te1, te2), t);
       case EUnop(op, prefix, e1):
@@ -348,6 +359,8 @@ class Typer
         var old:Int = declared.length;
         var te2:Null<TypedExpr> = e2 != null ? typeExpr(e2) : null;
         restore(old);
+        if (isNullUnknown(te1.t)) te1.t = buildNull(te2.t);
+        else if (isNullUnknown(te2.t)) te2.t = buildNull(te1.t);
         var t:CType = te2 != null ? commonType(te1.t, te2.t) : te1.t;
         return buildTypedExpr(e, TEIf(tcond, te1, te2), t);
       case EWhile(cond, e1):
@@ -426,6 +439,8 @@ class Typer
         var tcond:TypedExpr = typeExpr(cond);
         var te1:TypedExpr = typeExpr(e1);
         var te2:TypedExpr = typeExpr(e2);
+        if (isNullUnknown(te1.t)) te1.t = buildNull(te2.t);
+        else if (isNullUnknown(te2.t)) te2.t = buildNull(te1.t);
         var t:CType = commonType(te1.t, te2.t);
         return buildTypedExpr(e, TETernary(tcond, te1, te2), t);
       case ESwitch(e1, cases, defaultExpr):
@@ -515,9 +530,48 @@ class Typer
   function commonType(t1:CType, t2:CType):CType
   {
     if (equalType(t1, t2)) return t1;
+    else if (equalType(getNullInner(t1), getNullInner(t2))) return buildNull(t1);
     else if (isNumber(t1) && isNumber(t2)) return builtin('Float');
     else
       return builtin('Dynamic');
+  }
+
+  function buildNull(t:CType):CType
+  {
+    return isNull(t) ? t : CTPath(['Null'], [t]);
+  }
+
+  function getNullInner(t:CType):CType
+  {
+    switch (t)
+    {
+      case CTPath(['Null'], [p]):
+        return p;
+      default:
+        return t;
+    }
+  }
+
+  function isNullUnknown(t:CType):Bool
+  {
+    switch (t)
+    {
+      case CTPath(['Null'], [p]):
+        return isUnknown(p);
+      default:
+        return false;
+    }
+  }
+
+  function isNull(t:CType):Bool
+  {
+    switch (t)
+    {
+      case CTPath(['Null'], [_]):
+        return true;
+      default:
+        return false;
+    }
   }
 
   function isNumber(t:CType):Bool

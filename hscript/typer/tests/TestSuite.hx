@@ -30,6 +30,8 @@ class TestSuite extends Test
     assertPass('var c = new Array();');
     assertPass('var nested = { a: { b: 1 } };');
     assertPass('var ternary = true ? 1 : 0;');
+    assertPass('var x:Null<Int> = 5;');
+    assertPass('var y = true ? null : 5.2;');
   }
 
   function assertPass(code:String):Void
