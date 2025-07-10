@@ -109,7 +109,11 @@ class Typer
         add(n, t ?? te1?.t ?? unknown());
 
         // validation ...
-        if (te1 != null && t != null && !equalType(t, te1.t) && !(isFloat(t) && isInt(te1.t)) && !(isDynamic(t) || isDynamic(te1.t)))
+        if (te1 != null
+          && t != null
+          && !equalType(t, te1.t)
+          && !(isFloat(getNullInner(t)) && isInt(getNullInner(te1.t)))
+          && !(isDynamic(t) || isDynamic(te1.t)))
         {
           if (equalType(te1.t, CTPath(['Array'], [unknown()])))
           {
@@ -120,7 +124,8 @@ class Typer
                 error(e1, '"${typeToString(te1.t)}" should be "${typeToString(t)}"');
             }
           }
-          else if (!isNull(t) && isNull(te1.t))
+          else if (!equalType(getNullInner(t), getNullInner(te1.t))
+            || (equalType(getNullInner(t), getNullInner(te1.t)) && !isNull(t) && isNull(te1.t)))
           {
             error(e1, '"${typeToString(te1.t)}" should be "${typeToString(t)}"');
           }
@@ -198,7 +203,7 @@ class Typer
         // validation ...
         if (!equalType(te1.t, te2.t) && !(isDynamic(te1.t) || isDynamic(te2.t)))
         {
-          if ((!isFloat(commonType(te1.t, te2.t)) && !equalType(getNullInner(te1.t), getNullInner(te2.t)))
+          if ((!isFloat(getNullInner(commonType(te1.t, te2.t))) && !equalType(getNullInner(te1.t), getNullInner(te2.t)))
             || (['=', '+=', '-=', '*=', '/='].contains(op) && (isInt(te1.t) || (!isNull(te1.t) && isNull(te2.t)))))
           {
             error(e2, '"${typeToString(te2.t)}" should be "${typeToString(te1.t)}"');
@@ -533,6 +538,7 @@ class Typer
     if (equalType(t1, t2)) return t1;
     else if (equalType(getNullInner(t1), getNullInner(t2))) return buildNull(t1);
     else if (isNumber(t1) && isNumber(t2)) return builtin('Float');
+    else if (isNumber(getNullInner(t1)) && isNumber(getNullInner(t2))) return buildNull(builtin('Float'));
     else
       return builtin('Dynamic');
   }
