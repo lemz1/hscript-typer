@@ -35,8 +35,7 @@ class TestSuiteModules extends Test
       var modules = parser.parseModule(code);
       var interp = new Interp();
       var typer = new Typer(interp);
-      typer.typeModules([modules]);
-      typer.validateModules();
+      var _ = typer.typeModules([modules]);
       Assert.pass();
     }
     catch (e:TyperError)

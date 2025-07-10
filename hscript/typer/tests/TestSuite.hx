@@ -43,8 +43,7 @@ class TestSuite extends Test
       var e = parser.parseString(code);
       var interp = new Interp();
       var typer = new Typer(interp);
-      var te = typer.type(e);
-      typer.validate(te, code);
+      var _ = typer.type(e, code);
       Assert.pass();
     }
     catch (e:TyperError)
