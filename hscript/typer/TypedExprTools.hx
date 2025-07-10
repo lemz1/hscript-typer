@@ -7,7 +7,7 @@ class TypedExprTools
 {
   static final TAB:String = '  ';
 
-  public static function toString(e:TypedExpr, printTypes:Bool):String
+  public static function toString(e:TypedExpr, printTypes:Bool = true):String
   {
     var str:String = '';
     switch (e.e)

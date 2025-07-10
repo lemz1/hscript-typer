@@ -26,6 +26,7 @@ using hscript.typer.TypedExprTools;
 
 class Main {
     static function main() {
+        var code:String = 'var a = 12.5; var b = 5; var c = a + b;';
         var parser:Parser = new Parser();
         parser.allowTypes = true;
         var e:Expr = parser.parseString(code);

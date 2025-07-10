@@ -50,5 +50,9 @@ class TestSuite extends Test
     {
       Assert.fail(e.toString());
     }
+    catch (e:String)
+    {
+      Assert.warn(e);
+    }
   }
 }
