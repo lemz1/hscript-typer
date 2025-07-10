@@ -62,7 +62,7 @@ class Typer
    */
   public function typeModules(modules:Array<TyperModule>):Dynamic
   {
-    return null;
+    throw 'Currently modules are not supported';
   }
 
   function typeExpr(e:Expr):TypedExpr
