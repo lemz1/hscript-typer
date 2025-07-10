@@ -89,7 +89,7 @@ class Typer
         }
         else if (locals.exists(v))
         {
-          if (isUnknown(locals.get(v))) error(e, 'Local variable ${v} used without being initialized');
+          if (isUnknown(locals.get(v))) error(e, 'Local variable "${v}" used without being initialized');
           locals.get(v);
         }
         else if (interp.variables.exists(v))
@@ -98,7 +98,7 @@ class Typer
         }
         else
         {
-          error(e, 'Unknown identifier ${v}');
+          error(e, 'Unknown identifier "${v}"');
         }
         return buildTypedExpr(e, TEIdent(v), t);
 
