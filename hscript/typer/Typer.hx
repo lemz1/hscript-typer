@@ -21,6 +21,7 @@ class Typer
   public var returnsFallbackToDynamic:Bool = false;
 
   var interp:Interp;
+  var members:Map<String, CType>;
   var locals:Map<String, CType>;
   var declared:Array<{n:String, old:Null<CType>}>;
 
@@ -32,6 +33,7 @@ class Typer
   public function new(interp:Interp)
   {
     this.interp = interp;
+    this.members = new Map<String, CType>();
     this.locals = new Map<String, CType>();
     this.declared = [];
     this.canBreakOrContinue = false;
@@ -45,7 +47,7 @@ class Typer
    * @param code The code for better error messages
    * @return The typed expression
    */
-  public function type(e:Expr, ?code:String):TypedExpr
+  public function type(e:Expr, ?code:String)
   {
     this.locals.clear();
     this.declared = [];
@@ -60,9 +62,148 @@ class Typer
    * @param modules An array of modules to type
    * @return The typed modules
    */
-  public function typeModules(modules:Array<TyperModule>):Dynamic
+  public function typeModules(modules:Array<TyperModule>):Array<TypedModuleDecl>
   {
-    throw 'Currently modules are not supported';
+    var tmodules:Array<TypedModuleDecl> = [];
+    for (m in modules)
+      for (d in m.decls)
+        tmodules.push(typeModuleDecl(d, m.code));
+    return tmodules;
+  }
+
+  function typeModuleDecl(m:ModuleDecl, ?code:String, ?origin:String):TypedModuleDecl
+  {
+    switch (m)
+    {
+      case DPackage(path):
+        return TDPackage(path);
+      case DImport(path, everything, name):
+        return TDImport(path, everything, name);
+      case DClass(c):
+        members.clear();
+        var vars:Array<FieldDecl> = [];
+        var funs:Array<FieldDecl> = [];
+        for (fd in c.fields)
+        {
+          switch (fd.kind)
+          {
+            case KVar(_):
+              vars.push(fd);
+            case KFunction(_):
+              funs.push(fd);
+          }
+        }
+        var tfields:Array<TypedFieldDecl> = [];
+        for (fd in vars.concat(funs))
+        {
+          if (members.exists(fd.name)) moduleError('"${c.name}.${fd.name}" declared twice', origin);
+          var tkind:TypedFieldKind = switch (fd.kind)
+          {
+            case KFunction(f):
+              var targs:Array<TypedArgument> = [
+                for (a in f.args)
+                  {
+                    name: a.name,
+                    t: a.t ?? (argumentsFallbackToDynamic ? builtin('Dynamic') : moduleError('Argument "${a.name}" inside "${c.name}.${fd.name}" needs to have a type',
+                      origin)),
+                    opt: a.opt,
+                    value: a.value != null ? type(a.value, code) : null
+                  }
+              ];
+              var tret:CType = f.ret ?? (fd.name == 'new' ? builtin('Void') : (returnsFallbackToDynamic ? builtin('Dynamic') : moduleError('"${c.name}.${fd.name}" needs to have a return type',
+                origin)));
+              var oldRet:CType = requiredReturnType;
+              requiredReturnType = tret;
+              var texpr:TypedExpr = type(f.expr, code);
+              requiredReturnType = oldRet;
+              var t:CType = CTFun([for (ta in targs) ta.t], tret);
+              members.set(fd.name, t);
+              TKFunction({args: targs, expr: texpr, ret: tret});
+            case KVar(v):
+              if (v.get != null
+                && !['default', 'get', 'never'].contains(v.get)) moduleError('Property accessor "${v.get}" in "${c.name}.${fd.name}" does not exist', origin);
+              if (v.set != null
+                && !['default', 'set', 'never'].contains(v.set)) moduleError('Property accessor "${v.set}" in "${c.name}.${fd.name}" does not exist', origin);
+              if (v.type == null && v.expr == null) moduleError('"${c.name}.${fd.name}" needs to have a type or be initialized', origin);
+              var texpr:Null<TypedExpr> = v.expr != null ? type(v.expr, code) : null;
+
+              if (texpr != null
+                && v.type != null
+                && !equalType(v.type, texpr.t)
+                && !(isFloat(v.type) && isInt(texpr.t))
+                && !(isDynamic(v.type) || isDynamic(texpr.t)))
+              {
+                if (equalType(texpr.t, CTPath(['Array'], [unknown()])))
+                {
+                  switch (v.type)
+                  {
+                    case CTPath(['Array'], [_]):
+                    default:
+                      error(v.expr, '"${typeToString(texpr.t)}" should be "${typeToString(v.type)}"');
+                  }
+                }
+                else
+                {
+                  error(v.expr, '"${typeToString(texpr.t)}" should be "${typeToString(v.type)}"');
+                }
+              }
+              if (texpr != null && (v.type == null || (v.type != null && !isDynamic(v.type))))
+              {
+                if (isDynamic(texpr.t))
+                {
+                  switch (texpr.e)
+                  {
+                    case TETernary(_, _, _) | TEIf(_, _, _):
+                      if (v.type == null)
+                      {
+                        moduleError('Variable "${fd.name}" inside "${c.name}" needs to be explicitly set to "Dynamic"');
+                      }
+                      else
+                      {
+                        error(v.expr, '"Dynamic" should be "${typeToString(v.type)}"');
+                      }
+                    default:
+                  }
+                }
+                else if (v.type == null && equalType(texpr.t, CTPath(['Array'], [builtin('Dynamic')])))
+                {
+                  moduleError('Type of variable "${fd.name}" inside "${c.name}" needs to be explicitly set to "Array<Dynamic>"');
+                }
+              }
+              var t:CType = v.type ?? texpr.t;
+              members.set(fd.name, t);
+              TKVar(
+                {
+                  get: v.get,
+                  set: v.set,
+                  expr: texpr,
+                  type: t
+                });
+          };
+          tfields.push(
+            {
+              name: fd.name,
+              meta: fd.meta,
+              kind: tkind,
+              access: fd.access
+            });
+        }
+        return TDClass(
+          {
+            name: c.name,
+            params: c.params,
+            meta: c.meta,
+            isPrivate: c.isPrivate,
+            extend: c.extend,
+            implement: c.implement,
+            fields: tfields,
+            isExtern: c.isExtern
+          });
+      case DTypedef(c):
+        return TDTypedef(c);
+      case DEnum(e):
+        return TDEnum(e);
+    }
   }
 
   function typeExpr(e:Expr):TypedExpr
@@ -87,10 +228,18 @@ class Typer
         {
           CTPath(['Null'], [unknown()]);
         }
+        else if (v == 'this') // TODO
+        {
+          builtin('Dynamic');
+        }
         else if (locals.exists(v))
         {
           if (isUnknown(locals.get(v))) error(e, 'Local variable "${v}" used without being initialized');
           locals.get(v);
+        }
+        else if (members.exists(v))
+        {
+          members.get(v);
         }
         else if (interp.variables.exists(v))
         {
@@ -462,9 +611,8 @@ class Typer
         return buildTypedExpr(e, TEDoWhile(tcond, te1), builtin('Void'));
 
       case EMeta(name, args, e1):
-        var targs:Array<TypedExpr> = [for (a in args) typeExpr(a)];
         var te1:TypedExpr = typeExpr(e1);
-        return buildTypedExpr(e, TEMeta(name, targs, te1), builtin('Void'));
+        return buildTypedExpr(e, TEMeta(name, args, te1), builtin('Void'));
 
       case ECheckType(e1, t):
         // typing ...
@@ -513,6 +661,8 @@ class Typer
 
     switch (t)
     {
+      case CTPath(['Dynamic'], null):
+        return t;
       case CTPath(path, params):
         var dottedPath:String = path.join('.');
         if (dottedPath == 'Class') return _getFieldType(params[0], f, false);
@@ -699,21 +849,31 @@ class Typer
   }
 
   /**
-   * Throw a typer error
+   * Throw an `ExprError`
    * @param e The expression
    * @param m The message
    */
-  function error(e:Expr, m:String):Dynamic
+  function error(e:Expr, msg:String):Dynamic
   {
     #if hscriptPos
-    throw new TyperError(m, e.origin, e.line, e.pmin, e.pmax, code);
+    throw new ExprError(msg, e.origin, e.line, e.pmin, e.pmax, code);
     #else
-    throw new TyperError(m);
+    throw new ExprError(msg);
     #end
+  }
+
+  /**
+   * Throw a `ModuleError`
+   * @param m The message
+   * @param o The origin
+   */
+  function moduleError(m:String, ?o:String):Dynamic
+  {
+    throw new ModuleError(m, o);
   }
 }
 
-class TyperError extends haxe.Exception
+class ExprError extends haxe.Exception
 {
   public var origin(default, null):Null<String>;
   public var line(default, null):Null<Int>;
@@ -755,4 +915,25 @@ class TyperError extends haxe.Exception
   }
 }
 
-typedef TyperModule = Array<ModuleDecl>;
+class ModuleError extends haxe.Exception
+{
+  public var origin(default, null):Null<String>;
+
+  public function new(message:String, ?origin:String)
+  {
+    super(message);
+    this.origin = origin;
+  }
+
+  override public function toString():String
+  {
+    return origin != null ? '${origin}: ${message}' : message;
+  }
+}
+
+typedef TyperModule =
+{
+  var decls:Array<ModuleDecl>;
+  @:optional var code:String;
+  @:optional var origin:String;
+};

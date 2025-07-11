@@ -15,7 +15,7 @@ class TestSuiteModules extends Test
 
     class MyClass 
     {
-      var x:Int;
+      var x = 5;
 
       public function new() 
       {
@@ -32,19 +32,15 @@ class TestSuiteModules extends Test
     {
       var parser = new Parser();
       parser.allowTypes = true;
-      var modules = parser.parseModule(code);
+      var module = {decls: parser.parseModule(code), code: code};
       var interp = new Interp();
       var typer = new Typer(interp);
-      var _ = typer.typeModules([modules]);
+      var _ = typer.typeModules([module]);
       Assert.pass();
     }
-    catch (e:TyperError)
+    catch (e:ExprError)
     {
       Assert.fail(e.toString());
-    }
-    catch (e:String)
-    {
-      Assert.warn(e);
     }
   }
 }

@@ -3,8 +3,8 @@
   "url": "https://github.com/lemz1/hscript-typer",
   "license": "MIT",
   "description": "A simple typer for hscript.",
-  "version": "1.1.1",
-  "releasenote": "TypedExprTools.toString(): printTypes is now true by default",
+  "version": "1.2.0",
+  "releasenote": "Bare minimum module support",
   "contributors": ["lemz1"],
   "dependencies": {
     "hscript": ""

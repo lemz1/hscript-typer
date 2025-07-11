@@ -46,13 +46,9 @@ class TestSuite extends Test
       var _ = typer.type(e, code);
       Assert.pass();
     }
-    catch (e:TyperError)
+    catch (e:ExprError)
     {
       Assert.fail(e.toString());
-    }
-    catch (e:String)
-    {
-      Assert.warn(e);
     }
   }
 }

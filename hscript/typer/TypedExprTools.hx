@@ -112,7 +112,7 @@ class TypedExprTools
         str += 'do ${toString(e1, printTypes)} while (${toString(cond, printTypes)})';
       case TEMeta(name, args, e1):
         str += '@${name}';
-        if (args.length > 0) str += [for (a in args) toString(a, printTypes)].join(', ');
+        if (args.length > 0) str += [for (a in args) exprtToString(a)].join(', ');
         str += ' ${toString(e1, printTypes)}';
       case TECheckType(e1, t):
         str += '${toString(e1, printTypes)}:${typeToString(t)}';
@@ -125,6 +125,11 @@ class TypedExprTools
   static function typeToString(t:CType):String
   {
     return new Printer().typeToString(t);
+  }
+
+  static function exprtToString(e:Expr):String
+  {
+    return new Printer().exprToString(e);
   }
 
   static function applyTab(s:String):String
