@@ -4,8 +4,6 @@ A simple static type checker for [HScript](https://lib.haxe.org/p/hscript/).
 
 This library provides a basic typer for HScript, enabling limited type checking and inference for scripts written using the HScript language in Haxe.
 
-> **Note:** Currently, the typer **does not support modules**.
-
 ## Installation
 
 Install via haxelib:
@@ -45,7 +43,7 @@ class Main {
 
 ## Limitations
 
-- No support for modules (e.g., imports, packages, or type declarations across files)
+- Only bare minimum support for modules
 - Type checking is limited and may not cover all Haxe language features
 - Currently no null safety
 
