@@ -3,8 +3,8 @@
   "url": "https://github.com/lemz1/hscript-typer",
   "license": "MIT",
   "description": "A simple typer for hscript.",
-  "version": "1.2.1",
-  "releasenote": "Bare minimum module support",
+  "version": "1.3.0",
+  "releasenote": "Better module support + Type validation",
   "contributors": ["lemz1"],
   "dependencies": {
     "hscript": ""

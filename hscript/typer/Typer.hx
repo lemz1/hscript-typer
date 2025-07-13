@@ -25,10 +25,16 @@ class Typer
   var locals:Map<String, CType>;
   var declared:Array<{n:String, old:Null<CType>}>;
 
+  var pack:Array<String>;
+  var imports:Map<String, CType>;
+  var everythingImports:Array<Array<String>>;
+  var scriptedTypes:Map<String, ModuleDecl>;
+
   var canBreakOrContinue:Bool;
   var requiredReturnType:CType;
 
   var code:Null<String>;
+  var origin:Null<String>;
 
   public function new(interp:Interp)
   {
@@ -36,9 +42,14 @@ class Typer
     this.members = new Map<String, CType>();
     this.locals = new Map<String, CType>();
     this.declared = [];
+    this.pack = [];
+    this.imports = new Map<String, CType>();
+    this.everythingImports = [];
+    this.scriptedTypes = new Map<String, ModuleDecl>();
     this.canBreakOrContinue = false;
     this.requiredReturnType = builtin('Void');
     this.code = null;
+    this.origin = null;
   }
 
   /**
@@ -47,14 +58,19 @@ class Typer
    * @param code The code for better error messages
    * @return The typed expression
    */
-  public function type(e:Expr, ?code:String)
+  public function type(e:Expr, ?code:String):TypedExpr
   {
-    this.locals.clear();
-    this.declared = [];
-    this.canBreakOrContinue = false;
-    this.requiredReturnType = builtin('Void');
     this.code = code;
-    return typeExpr(e);
+
+    var t:TypedExpr = typeExpr(e);
+
+    locals.clear();
+    declared = [];
+    canBreakOrContinue = false;
+    requiredReturnType = builtin('Void');
+    this.code = null;
+
+    return t;
   }
 
   /**
@@ -64,146 +80,245 @@ class Typer
    */
   public function typeModules(modules:Array<TyperModule>):Array<TypedModuleDecl>
   {
+    for (m in modules)
+      retrieveScriptedTypes(m);
+
     var tmodules:Array<TypedModuleDecl> = [];
     for (m in modules)
-      for (d in m.decls)
-        tmodules.push(typeModuleDecl(d, m.code));
+      tmodules = tmodules.concat(typeModule(m));
+
+    pack = [];
+    imports.clear();
+    everythingImports = [];
+    scriptedTypes.clear();
+
     return tmodules;
   }
 
-  function typeModuleDecl(m:ModuleDecl, ?code:String, ?origin:String):TypedModuleDecl
+  function retrieveScriptedTypes(m:TyperModule):Void
   {
-    switch (m)
-    {
-      case DPackage(path):
-        return TDPackage(path);
-      case DImport(path, everything, name):
-        return TDImport(path, everything, name);
-      case DClass(c):
-        members.clear();
-        var vars:Array<FieldDecl> = [];
-        var funs:Array<FieldDecl> = [];
-        for (fd in c.fields)
-        {
-          switch (fd.kind)
-          {
-            case KVar(_):
-              vars.push(fd);
-            case KFunction(_):
-              funs.push(fd);
-          }
-        }
-        var tfields:Array<TypedFieldDecl> = [];
-        for (fd in vars.concat(funs))
-        {
-          if (members.exists(fd.name)) moduleError('"${c.name}.${fd.name}" declared twice', origin);
-          var tkind:TypedFieldKind = switch (fd.kind)
-          {
-            case KFunction(f):
-              var targs:Array<TypedArgument> = [
-                for (a in f.args)
-                  {
-                    name: a.name,
-                    t: a.t ?? (argumentsFallbackToDynamic ? builtin('Dynamic') : moduleError('Argument "${a.name}" inside "${c.name}.${fd.name}" needs to have a type',
-                      origin)),
-                    opt: a.opt,
-                    value: a.value != null ? type(a.value, code) : null
-                  }
-              ];
-              var tret:CType = f.ret ?? (fd.name == 'new' ? builtin('Void') : (returnsFallbackToDynamic ? builtin('Dynamic') : moduleError('"${c.name}.${fd.name}" needs to have a return type',
-                origin)));
-              var oldRet:CType = requiredReturnType;
-              requiredReturnType = tret;
-              var texpr:TypedExpr = type(f.expr, code);
-              requiredReturnType = oldRet;
-              var t:CType = CTFun([for (ta in targs) ta.t], tret);
-              members.set(fd.name, t);
-              TKFunction({args: targs, expr: texpr, ret: tret});
-            case KVar(v):
-              if (v.get != null
-                && !['default', 'get', 'never'].contains(v.get)) moduleError('Property accessor "${v.get}" in "${c.name}.${fd.name}" does not exist', origin);
-              if (v.set != null
-                && !['default', 'set', 'never'].contains(v.set)) moduleError('Property accessor "${v.set}" in "${c.name}.${fd.name}" does not exist', origin);
-              if (v.type == null && v.expr == null) moduleError('"${c.name}.${fd.name}" needs to have a type or be initialized', origin);
-              var texpr:Null<TypedExpr> = v.expr != null ? type(v.expr, code) : null;
+    origin = m.origin;
 
-              if (texpr != null
-                && v.type != null
-                && !equalType(v.type, texpr.t)
-                && !(isFloat(v.type) && isInt(texpr.t))
-                && !(isDynamic(v.type) || isDynamic(texpr.t)))
-              {
-                if (equalType(texpr.t, CTPath(['Array'], [unknown()])))
-                {
-                  switch (v.type)
-                  {
-                    case CTPath(['Array'], [_]):
-                    default:
-                      error(v.expr, '"${typeToString(texpr.t)}" should be "${typeToString(v.type)}"');
-                  }
-                }
-                else
-                {
-                  error(v.expr, '"${typeToString(texpr.t)}" should be "${typeToString(v.type)}"');
-                }
-              }
-              if (texpr != null && (v.type == null || (v.type != null && !isDynamic(v.type))))
-              {
-                if (isDynamic(texpr.t))
-                {
-                  switch (texpr.e)
-                  {
-                    case TETernary(_, _, _) | TEIf(_, _, _):
-                      if (v.type == null)
-                      {
-                        moduleError('Variable "${fd.name}" inside "${c.name}" needs to be explicitly set to "Dynamic"');
-                      }
-                      else
-                      {
-                        error(v.expr, '"Dynamic" should be "${typeToString(v.type)}"');
-                      }
-                    default:
-                  }
-                }
-                else if (v.type == null && equalType(texpr.t, CTPath(['Array'], [builtin('Dynamic')])))
-                {
-                  moduleError('Type of variable "${fd.name}" inside "${c.name}" needs to be explicitly set to "Array<Dynamic>"');
-                }
-              }
-              var t:CType = v.type ?? texpr.t;
-              members.set(fd.name, t);
-              TKVar(
-                {
-                  get: v.get,
-                  set: v.set,
-                  expr: texpr,
-                  type: t
-                });
-          };
-          tfields.push(
-            {
-              name: fd.name,
-              meta: fd.meta,
-              kind: tkind,
-              access: fd.access
-            });
-        }
-        return TDClass(
+    var canSetPack:Bool = true;
+    var canSetImport:Bool = true;
+    for (d in m.decls)
+    {
+      switch (d)
+      {
+        case DPackage(path):
+          if (!canSetPack) moduleError('"package" needs to be the first expression in the module');
+          pack = path;
+          for (i in 0...pack.length)
+            everythingImports.push(pack.slice(0, i + 1));
+
+        case DImport(path, everything, name):
+          if (!canSetImport) moduleError('"import" and "using" may not appear after a declaration');
+          canSetPack = false;
+          if (everything ?? false)
           {
-            name: c.name,
-            params: c.params,
-            meta: c.meta,
-            isPrivate: c.isPrivate,
-            extend: c.extend,
-            implement: c.implement,
-            fields: tfields,
-            isExtern: c.isExtern
-          });
-      case DTypedef(c):
-        return TDTypedef(c);
-      case DEnum(e):
-        return TDEnum(e);
+            everythingImports.push(pack);
+          }
+          else
+          {
+            var name:String = name ?? path[path.length - 1];
+            imports.set(name, CTPath(path, null));
+          }
+
+        case DClass(c):
+          canSetPack = false;
+          canSetImport = false;
+          scriptedTypes.set(getFullPath(c.name), d);
+
+        case DTypedef(c):
+          canSetPack = false;
+          canSetImport = false;
+          scriptedTypes.set(getFullPath(c.name), d);
+
+        case DEnum(e):
+          canSetPack = false;
+          canSetImport = false;
+          scriptedTypes.set(getFullPath(e.name), d);
+      }
     }
+
+    pack = [];
+    imports.clear();
+    everythingImports = [];
+    origin = null;
+  }
+
+  function typeModule(m:TyperModule):Array<TypedModuleDecl>
+  {
+    origin = m.origin;
+
+    var tmodules:Array<TypedModuleDecl> = [];
+    for (d in m.decls)
+    {
+      switch (d)
+      {
+        case DPackage(path):
+          pack = path;
+          for (i in 0...pack.length)
+            everythingImports.push(pack.slice(0, i + 1));
+          tmodules.push(TDPackage(path));
+
+        case DImport(path, everything, name):
+          if (everything ?? false)
+          {
+            everythingImports.push(path);
+          }
+          else
+          {
+            var name:String = name ?? path[path.length - 1];
+            imports.set(name, CTPath(path, null));
+          }
+          tmodules.push(TDImport(path, everything, name));
+
+        case DClass(c):
+          members.clear();
+          var vars:Array<FieldDecl> = [];
+          var funs:Array<FieldDecl> = [];
+          for (fd in c.fields)
+          {
+            switch (fd.kind)
+            {
+              case KVar(_):
+                vars.push(fd);
+
+              case KFunction(_):
+                funs.push(fd);
+            }
+          }
+
+          var tfields:Array<TypedFieldDecl> = [];
+          for (fd in vars.concat(funs))
+          {
+            if (members.exists(fd.name)) moduleError('"${getFullPath(c.name)}.${fd.name}" declared twice');
+
+            var tkind:TypedFieldKind = switch (fd.kind)
+            {
+              case KFunction(f):
+                var targs:Array<TypedArgument> = [
+                  for (a in f.args)
+                    {
+                      name: a.name,
+                      t: a.t ?? (argumentsFallbackToDynamic ? builtin('Dynamic') : moduleError('Argument "${a.name}" inside "${getFullPath(c.name)}.${fd.name}" needs to have a type')),
+                      opt: a.opt,
+                      value: a.value != null ? type(a.value, m.code) : null
+                    }
+                ];
+                for (ta in targs)
+                  if (!typeIsValid(ta.t)) moduleError('"${typeToString(ta.t)}" is not valid ("${getFullPath(c.name)}.${fd.name}")');
+                var tret:CType = f.ret ?? (fd.name == 'new' ? builtin('Void') : (returnsFallbackToDynamic ? builtin('Dynamic') : moduleError('"${getFullPath(c.name)}.${fd.name}" needs to have a return type')));
+                if (!typeIsValid(tret)) moduleError('"${typeToString(tret)}" is not valid ("${getFullPath(c.name)}.${fd.name}")');
+                var oldRet:CType = requiredReturnType;
+                requiredReturnType = tret;
+                var texpr:TypedExpr = type(f.expr, m.code);
+                requiredReturnType = oldRet;
+                var t:CType = CTFun([for (ta in targs) ta.t], tret);
+                members.set(fd.name, t);
+                TKFunction({args: targs, expr: texpr, ret: tret});
+
+              case KVar(v):
+                if (v.get != null
+                  && !['default', 'get', 'never'].contains(v.get))
+                  moduleError('Property accessor "${v.get}" in "${getFullPath(c.name)}.${fd.name}" does not exist');
+                if (v.set != null
+                  && !['default', 'set', 'never'].contains(v.set))
+                  moduleError('Property accessor "${v.set}" in "${getFullPath(c.name)}.${fd.name}" does not exist');
+                if (v.type == null && v.expr == null) moduleError('"${getFullPath(c.name)}.${fd.name}" needs to have a type or be initialized');
+                if (v.type != null && !typeIsValid(v.type)) moduleError('"${typeToString(v.type)}" is not a valid type');
+                var texpr:Null<TypedExpr> = v.expr != null ? type(v.expr, m.code) : null;
+                if (texpr != null && !typeIsValid(texpr.t)) moduleExprError(v.expr, '"${typeToString(texpr.t)}" is not a valid type', m.code);
+                if (texpr != null
+                  && v.type != null
+                  && !equalType(v.type, texpr.t)
+                  && !(isFloat(v.type) && isInt(texpr.t))
+                  && !(isDynamic(v.type) || isDynamic(texpr.t)))
+                {
+                  if (equalType(texpr.t, CTPath(['Array'], [unknown()])))
+                  {
+                    switch (v.type)
+                    {
+                      case CTPath(['Array'], [_]):
+                      default:
+                        moduleExprError(v.expr, '"${typeToString(texpr.t)}" should be "${typeToString(v.type)}"', m.code);
+                    }
+                  }
+                  else
+                  {
+                    moduleExprError(v.expr, '"${typeToString(texpr.t)}" should be "${typeToString(v.type)}"', m.code);
+                  }
+                }
+                if (texpr != null && (v.type == null || (v.type != null && !isDynamic(v.type))))
+                {
+                  if (isDynamic(texpr.t))
+                  {
+                    switch (texpr.e)
+                    {
+                      case TETernary(_, _, _) | TEIf(_, _, _):
+                        if (v.type == null)
+                        {
+                          moduleError('Type of variable "${getFullPath(c.name)}.${fd.name}" needs to be explicitly set to "Dynamic"');
+                        }
+                        else
+                        {
+                          moduleExprError(v.expr, '"Dynamic" should be "${typeToString(v.type)}"', m.code);
+                        }
+                      default:
+                    }
+                  }
+                  else if (v.type == null && equalType(texpr.t, CTPath(['Array'], [builtin('Dynamic')])))
+                  {
+                    moduleError('Type of variable "${getFullPath(c.name)}.${fd.name}" needs to be explicitly set to "Array<Dynamic>"');
+                  }
+                }
+                var t:CType = v.type ?? texpr.t;
+                members.set(fd.name, t);
+                TKVar(
+                  {
+                    get: v.get,
+                    set: v.set,
+                    expr: texpr,
+                    type: t
+                  });
+            };
+
+            tfields.push(
+              {
+                name: fd.name,
+                meta: fd.meta,
+                kind: tkind,
+                access: fd.access
+              });
+          }
+
+          tmodules.push(TDClass(
+            {
+              name: c.name,
+              params: c.params,
+              meta: c.meta,
+              isPrivate: c.isPrivate,
+              extend: c.extend,
+              implement: c.implement,
+              fields: tfields,
+              isExtern: c.isExtern
+            }));
+
+        case DTypedef(c):
+          tmodules.push(TDTypedef(c));
+
+        case DEnum(e):
+          tmodules.push(TDEnum(e));
+      }
+    }
+
+    pack = [];
+    imports.clear();
+    everythingImports = [];
+    origin = null;
+
+    return tmodules;
   }
 
   function typeExpr(e:Expr):TypedExpr
@@ -247,17 +362,18 @@ class Typer
         }
         else
         {
-          error(e, 'Unknown identifier "${v}"');
+          var type:Dynamic = resolveType(v) ?? error(e, 'Unknown identifier "${v}"');
+          resolvedTypeToCType(type);
         }
         return buildTypedExpr(e, TEIdent(v), t);
 
       case EVar(n, t, e1):
-        // typing ...
+        if (t != null && !typeIsValid(t)) error(e, '"${typeToString(t)}" is not a valid type');
+
         var te1:Null<TypedExpr> = e1 != null ? typeExpr(e1) : null;
         if (t != null && isNullUnknown(te1.t)) te1.t = t;
         add(n, t ?? te1?.t ?? unknown());
 
-        // validation ...
         if (te1 != null && t != null && !equalType(t, te1.t) && !(isFloat(t) && isInt(te1.t)) && !(isDynamic(t) || isDynamic(te1.t)))
         {
           if (equalType(te1.t, CTPath(['Array'], [unknown()])))
@@ -313,16 +429,67 @@ class Typer
 
       case EField(e1, f):
         // typing...
-        var te1:TypedExpr = typeExpr(e1);
-        var t:CType = getFieldType(te1.t, f);
+        var te1:Null<TypedExpr> = null;
+        var efield:Expr = e1;
+        var typePack:Array<String> = [];
+        #if hscriptPos
+        var pmin:Int = efield.pmin;
+        #end
+        while (efield != null)
+        {
+          switch (Tools.expr(efield))
+          {
+            case EIdent(v):
+              typePack.insert(0, v);
+              var path:String = typePack.join('.');
+              #if hscriptPos
+              var ne:Expr =
+                {
+                  e: EIdent(path),
+                  pmin: pmin,
+                  pmax: efield.pmax,
+                  origin: efield.origin,
+                  line: efield.line,
+                };
+              #else
+              var ne:Expr = EIdent(path);
+              #end
+              var type:Dynamic = resolveType(path);
+              if (type != null)
+              {
+                var t:CType = resolvedTypeToCType(type);
+                te1 = buildTypedExpr(ne, TEIdent(path), t);
+              }
+              break;
+            case EField(e2, f2):
+              typePack.insert(0, f2);
+              efield = e2;
+            default:
+              efield = null;
+          }
+        }
 
-        // validation ...
-        if (isUnknown(t)) error(e, '${typeToString(te1.t)} has no field "${f}"');
+        te1 ??= typeExpr(e1);
 
-        return buildTypedExpr(e, TEField(te1, f), t);
+        if (!isDynamic(te1.t))
+        {
+          var fields:Array<String> = [];
+          var isStatic:Bool = false;
+          switch (te1.t)
+          {
+            case CTPath(['Class'], [p]) | CTPath(['Enum'], [p]):
+              fields = getFields(p)?.statics ?? error(e1, 'Could not get fields for type "${typeToString(p)}"');
+              isStatic = true;
+            default:
+              fields = getFields(te1.t)?.fields ?? error(e1, 'Could not get fields for type "${typeToString(te1.t)}"');
+              isStatic = false;
+          }
+          if (!fields.contains(f)) error(e, '"${typeToString(te1.t)}" has no${isStatic ? ' static ' : ' instance '}field "${f}"');
+        }
+
+        return buildTypedExpr(e, TEField(te1, f), builtin('Dynamic'));
 
       case EBinop(op, e1, e2):
-        // typing ...
         var te1:TypedExpr = typeExpr(e1);
         var te2:TypedExpr = typeExpr(e2);
         if (op == '=' && (isUnknown(te1.t) || isNullUnknown(te1.t)))
@@ -344,7 +511,6 @@ class Typer
         else if (isNullUnknown(te2.t)) te2.t = te1.t;
         var t:CType = ['==', '!='].contains(op) ? builtin('Bool') : commonType(te1.t, te2.t);
 
-        // validation ...
         if (!equalType(te1.t, te2.t) && !(isDynamic(te1.t) || isDynamic(te2.t)))
         {
           if ((!isFloat(commonType(te1.t, te2.t)) && !equalType(te1.t, te2.t))
@@ -361,7 +527,6 @@ class Typer
         return buildTypedExpr(e, TEUnop(op, prefix, te1), te1.t);
 
       case ECall(e1, params):
-        // typing ...
         var te1:TypedExpr = typeExpr(e1);
         var tparams:Array<TypedExpr> = [for (p in params) typeExpr(p)];
         var t:CType = equalType(te1.t, builtin('Dynamic')) ? te1.t : switch (te1.t)
@@ -370,7 +535,6 @@ class Typer
           default: unknown();
         }
 
-        // validation ...
         switch (te1.t)
         {
           case CTFun(args, _):
@@ -401,7 +565,6 @@ class Typer
         return buildTypedExpr(e, TECall(te1, tparams), t);
 
       case EIf(cond, e1, e2):
-        // typing ...
         var tcond:TypedExpr = typeExpr(cond);
         var old:Int = declared.length;
         var te1:TypedExpr = typeExpr(e1);
@@ -413,13 +576,11 @@ class Typer
         else if (isNullUnknown(te2.t)) te2.t = te1.t;
         var t:CType = te2 != null ? commonType(te1.t, te2.t) : te1.t;
 
-        // validation ...
         if (!isBool(tcond.t)) error(cond, '"${typeToString(tcond.t)}" should be "Bool"');
 
         return buildTypedExpr(e, TEIf(tcond, te1, te2), t);
 
       case EWhile(cond, e1):
-        // typing ...
         var tcond:TypedExpr = typeExpr(cond);
         var old:Int = declared.length;
         canBreakOrContinue = true;
@@ -427,7 +588,6 @@ class Typer
         canBreakOrContinue = false;
         restore(old);
 
-        // validation ...
         if (!isBool(tcond.t)) error(cond, '"${typeToString(tcond.t)}" should be "Bool"');
 
         return buildTypedExpr(e, TEWhile(tcond, te1), builtin('Void'));
@@ -452,7 +612,6 @@ class Typer
         return buildTypedExpr(e, TEContinue, builtin('Void'));
 
       case EFunction(args, e1, name, ret):
-        // typing ...
         var targs:Array<TypedArgument> = [
           for (a in args)
             {
@@ -462,7 +621,10 @@ class Typer
               value: a.value != null ? typeExpr(a.value) : null
             }
         ];
+        for (ta in targs)
+          if (!typeIsValid(ta.t)) error(e, '"${typeToString(ta.t)}" is not a valid type');
         var tret:CType = ret ?? (returnsFallbackToDynamic ? builtin('Dynamic') : error(e, 'Function needs to have a return type'));
+        if (!typeIsValid(tret)) error(e, '"${typeToString(tret)}" is not a valid type');
         var oldRequiredReturnType:CType = requiredReturnType;
         requiredReturnType = tret;
         var old:Int = declared.length;
@@ -473,7 +635,6 @@ class Typer
         requiredReturnType = oldRequiredReturnType;
         var t:CType = CTFun([for (ta in targs) ta.t], tret);
 
-        // validation ...
         if (!equalType(te1.t, tret) && !(isFloat(tret) && isInt(te1.t)) && !(isDynamic(te1.t) || isDynamic(tret)))
         {
           error(e1, '"${typeToString(te1.t)}" should be "${typeToString(tret)}"');
@@ -482,11 +643,9 @@ class Typer
         return buildTypedExpr(e, TEFunction(targs, te1, name, tret), t);
 
       case EReturn(e1):
-        // typing ...
         var te1:Null<TypedExpr> = e1 != null ? typeExpr(e1) : null;
         var t:CType = te1?.t ?? builtin('Void');
 
-        // validation ...
         if (!equalType(requiredReturnType, t) && !(isFloat(requiredReturnType) && isInt(t)))
         {
           error(e, '"${typeToString(t)}" should be "${typeToString(requiredReturnType)}"');
@@ -495,12 +654,10 @@ class Typer
         return buildTypedExpr(e, TEReturn(te1), t);
 
       case EArray(e1, index):
-        // typing ...
         var te1:TypedExpr = typeExpr(e1);
         var tindex:TypedExpr = typeExpr(index);
         var t:CType = getIterable(te1.t) ?? error(e1, '"${typeToString(te1.t)}" needs to be iterable');
 
-        // validation ...
         if (!isInt(tindex.t))
         {
           error(index, '"${typeToString(tindex.t)}" should be Int');
@@ -522,27 +679,31 @@ class Typer
         return buildTypedExpr(e, TEArrayDecl(tes), t);
 
       case ENew(cl, params):
-        // typing ...
         var tparams:Array<TypedExpr> = [for (p in params) typeExpr(p)];
 
-        // validation ...
-        var cls:Class<Dynamic> = Type.resolveClass(cl);
+        var cls:Dynamic = resolveType(cl);
         if (cls == null) error(e, 'Class "${cl}" does not exist');
+        var t:CType = resolvedTypeToCType(cls);
+        switch (t)
+        {
+          case CTPath(['Class'], [p]):
+            t = p;
+          default:
+        }
 
-        return buildTypedExpr(e, TENew(cl, tparams), builtin('Dynamic'));
+        return buildTypedExpr(e, TENew(cl, tparams), t);
 
       case EThrow(e1):
         var te1:TypedExpr = typeExpr(e1);
         return buildTypedExpr(e, TEThrow(te1), builtin('Void'));
 
       case ETry(e1, v, t1, ecatch):
-        // typing ...
         var te1:TypedExpr = typeExpr(e1);
         var tecatch:TypedExpr = typeExpr(ecatch);
         var t:CType = commonType(te1.t, tecatch.t);
 
-        // validation ...
         if (t1 == null) error(e, 'Caught error "${v}" needs to have a type');
+        if (!typeIsValid(t1)) error(e, '"${typeToString(t1)}" is not a valid type');
 
         return buildTypedExpr(e, TETry(te1, v, t1, tecatch), t);
 
@@ -552,7 +713,6 @@ class Typer
         return buildTypedExpr(e, TEObject(tfl), t);
 
       case ETernary(cond, e1, e2):
-        // typing ...
         var tcond:TypedExpr = typeExpr(cond);
         var te1:TypedExpr = typeExpr(e1);
         var te2:TypedExpr = typeExpr(e2);
@@ -560,13 +720,11 @@ class Typer
         else if (isNullUnknown(te2.t)) te2.t = te1.t;
         var t:CType = commonType(te1.t, te2.t);
 
-        // validation ...
         if (!isBool(tcond.t)) error(cond, '"${typeToString(tcond.t)}" should be "Bool"');
 
         return buildTypedExpr(e, TETernary(tcond, te1, te2), t);
 
       case ESwitch(e1, cases, defaultExpr):
-        // typing ...
         var te1:TypedExpr = typeExpr(e1);
         var tcases:Array<{values:Array<TypedExpr>, expr:TypedExpr}> = [
           for (c in cases)
@@ -586,7 +744,6 @@ class Typer
           t = ct;
         }
 
-        // validation ...
         for (i => tc in tcases)
         {
           for (j => tv in tc.values)
@@ -601,11 +758,9 @@ class Typer
         return buildTypedExpr(e, TESwitch(te1, tcases, tdefaultExpr), t);
 
       case EDoWhile(cond, e1):
-        // typing ...
         var tcond:TypedExpr = typeExpr(cond);
         var te1:TypedExpr = typeExpr(e1);
 
-        // validation ...
         if (!isBool(tcond.t)) error(cond, '"${typeToString(tcond.t)}" should be "Bool"');
 
         return buildTypedExpr(e, TEDoWhile(tcond, te1), builtin('Void'));
@@ -615,10 +770,9 @@ class Typer
         return buildTypedExpr(e, TEMeta(name, args, te1), builtin('Void'));
 
       case ECheckType(e1, t):
-        // typing ...
         var te1:TypedExpr = typeExpr(e1);
 
-        // validation ...
+        if (!typeIsValid(t)) error(e, '"${typeToString(t)}" is not a valid type');
         if (!equalType(te1.t, t)) error(e, '"${typeToString(te1.t)}" should be "${typeToString(t)}"');
 
         return buildTypedExpr(e, TECheckType(te1, t), t);
@@ -628,6 +782,11 @@ class Typer
         var te1:TypedExpr = typeExpr(e1);
         return buildTypedExpr(e, TEForGen(tit, te1), te1.t);
     }
+  }
+
+  function getFullPath(s:String):String
+  {
+    return pack.concat([s]).join('.');
   }
 
   function getIterable(t:CType):Null<CType>
@@ -675,6 +834,141 @@ class Typer
         return getFieldType(t1, f);
       default:
         return unknown();
+    }
+  }
+
+  function getFields(t:CType):Null<{statics:Array<String>, fields:Array<String>}>
+  {
+    switch (t)
+    {
+      case CTPath(['Null'], [p]):
+        return getFields(p);
+
+      case CTPath(path, _):
+        var type:Dynamic = resolveType(path.join('.')) ?? return null;
+        if (Std.isOfType(type, Class)) return {statics: Type.getClassFields(type), fields: Type.getInstanceFields(type)};
+        if (Std.isOfType(type, Enum)) return {statics: Type.getEnumConstructs(type), fields: []};
+        switch ((cast type : ModuleDecl))
+        {
+          case DClass(c):
+            var superFields = c.extend != null ? getFields(c.extend) : null;
+            var statics:Array<String> = superFields?.statics ?? [];
+            var fields:Array<String> = superFields?.fields ?? [];
+            for (f in c.fields)
+              f.access.contains(AStatic) ? statics.push(f.name) : fields.push(f.name);
+            return {statics: statics, fields: fields};
+          case DTypedef(c):
+            return getFields(c.t);
+          case DEnum(e):
+            return {statics: [for (f in e.fields) f.name], fields: []};
+          default:
+        }
+        return null;
+
+      case CTAnon(fields):
+        return {statics: [], fields: [for (f in fields) f.name]};
+
+      case CTParent(t):
+        return getFields(t);
+
+      case CTOpt(t):
+        return getFields(t);
+
+      case CTNamed(_, t):
+        return getFields(t);
+
+      default:
+        return null;
+    }
+  }
+
+  function resolvedTypeToCType(t:Dynamic):CType
+  {
+    if (Std.isOfType(t, Class))
+    {
+      return CTPath(['Class'], [builtin(Type.getClassName(cast t))]);
+    }
+    else if (Std.isOfType(t, Enum))
+    {
+      return CTPath(['Enum'], [builtin(Type.getEnumName(cast t))]);
+    }
+    else
+    {
+      return cast t;
+    }
+  }
+
+  /**
+   * Returns either `Class<Dynamic>`, `Enum<Dynamic>` or `ModuleDecl`
+   */
+  function resolveType(path:String):Null<Dynamic>
+  {
+    var pathSplit:Array<String> = path.split('.');
+    if (pathSplit.length == 1)
+    {
+      var imp:Null<CType> = imports.get(path);
+      if (imp != null)
+      {
+        switch (imp)
+        {
+          case CTPath(path, null):
+            var path:String = path.join('.');
+            var type:Null<Dynamic> = null;
+            type ??= Type.resolveClass(path);
+            type ??= Type.resolveEnum(path);
+            type ??= scriptedTypes.get(path);
+            if (type != null) return type;
+
+          default:
+            throw 'Should not happen: ${imp}';
+        }
+      }
+
+      for (pack in everythingImports)
+      {
+        var path:String = pack.concat([path]).join('.');
+        var type:Null<Dynamic> = null;
+        type ??= Type.resolveClass(path);
+        type ??= Type.resolveEnum(path);
+        type ??= scriptedTypes.get(path);
+        if (type != null) return type;
+      }
+    }
+
+    var type:Null<Dynamic> = null;
+    type ??= Type.resolveClass(path);
+    type ??= Type.resolveEnum(path);
+    type ??= scriptedTypes.get(path);
+
+    return type;
+  }
+
+  function typeIsValid(t:CType):Bool
+  {
+    switch (t)
+    {
+      case CTPath(path, params):
+        if (resolveType(path.join('.')) == null) return false;
+        for (p in (params ?? []))
+          if (!typeIsValid(p)) return false;
+        return true;
+      case CTFun(args, ret):
+        for (a in args)
+          if (!typeIsValid(a)) return false;
+        if (!typeIsValid(ret)) return false;
+        return true;
+      case CTAnon(fields):
+        for (f in fields)
+          if (!typeIsValid(f.t)) return false;
+        return true;
+      case CTParent(t):
+        return typeIsValid(t);
+      case CTOpt(t):
+        return typeIsValid(t);
+      case CTNamed(_, t):
+        return typeIsValid(t);
+      case CTExpr(e):
+        return true;
     }
   }
 
@@ -865,11 +1159,25 @@ class Typer
   /**
    * Throw a `ModuleError`
    * @param m The message
-   * @param o The origin
    */
-  function moduleError(m:String, ?o:String):Dynamic
+  function moduleError(m:String):Dynamic
   {
-    throw new ModuleError(m, o);
+    throw new ModuleError(m, origin);
+  }
+
+  /**
+   * Throw an `ExprError`
+   * @param e The expression
+   * @param m The message
+   * @param code The code
+   */
+  function moduleExprError(e:Expr, m:String, code:Null<String>):Dynamic
+  {
+    var oldCode:Null<String> = this.code;
+    this.code = code;
+    error(e, m);
+    this.code = oldCode;
+    return null;
   }
 }
 
