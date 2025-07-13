@@ -25,6 +25,7 @@ class Typer
   var locals:Map<String, CType>;
   var declared:Array<{n:String, old:Null<CType>}>;
 
+  var curClass:Null<ClassDecl>;
   var pack:Array<String>;
   var imports:Map<String, CType>;
   var everythingImports:Array<Array<String>>;
@@ -42,6 +43,7 @@ class Typer
     this.members = new Map<String, CType>();
     this.locals = new Map<String, CType>();
     this.declared = [];
+    this.curClass = null;
     this.pack = [];
     this.imports = new Map<String, CType>();
     this.everythingImports = [];
@@ -175,6 +177,7 @@ class Typer
           tmodules.push(TDImport(path, everything, name));
 
         case DClass(c):
+          curClass = c;
           members.clear();
           var vars:Array<FieldDecl> = [];
           var funs:Array<FieldDecl> = [];
@@ -305,6 +308,8 @@ class Typer
               isExtern: c.isExtern
             }));
 
+          curClass = null;
+
         case DTypedef(c):
           tmodules.push(TDTypedef(c));
 
@@ -343,9 +348,13 @@ class Typer
         {
           CTPath(['Null'], [unknown()]);
         }
-        else if (v == 'this') // TODO
+        else if (curClass != null && v == 'this')
         {
-          builtin('Dynamic');
+          CTPath(pack.concat([curClass.name]), null);
+        }
+        else if (curClass != null && curClass.extend != null && v == 'super') 
+        {
+          curClass.extend;
         }
         else if (locals.exists(v))
         {
@@ -355,6 +364,10 @@ class Typer
         else if (members.exists(v))
         {
           members.get(v);
+        }
+        else if (curClass != null && curClass.extend != null && getFields(curClass.extend).fields.contains(v)) 
+        {
+          builtin('Dynamic');
         }
         else if (interp.variables.exists(v))
         {
