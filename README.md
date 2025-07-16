@@ -44,7 +44,6 @@ class Main {
 ## Limitations
 
 - Type checking is limited and may not cover all Haxe language features
-- Field access is currently always `Dynamic`
 - Currently no null safety
 
 ## Contributing

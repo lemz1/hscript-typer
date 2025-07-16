@@ -3,8 +3,8 @@
   "url": "https://github.com/lemz1/hscript-typer",
   "license": "MIT",
   "description": "A simple typer for hscript.",
-  "version": "1.4.0",
-  "releasenote": "Fixed calling super functions",
+  "version": "1.5.0",
+  "releasenote": "Use RTTI if available",
   "contributors": ["lemz1"],
   "dependencies": {
     "hscript": ""

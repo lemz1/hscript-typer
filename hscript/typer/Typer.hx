@@ -5,6 +5,8 @@ import hscript.Printer;
 import hscript.Interp;
 import hscript.Tools;
 import hscript.Expr;
+import haxe.rtti.CType as RType;
+import haxe.rtti.Rtti;
 
 using StringTools;
 
@@ -352,7 +354,7 @@ class Typer
         {
           CTPath(pack.concat([curClass.name]), null);
         }
-        else if (curClass != null && curClass.extend != null && v == 'super') 
+        else if (curClass != null && curClass.extend != null && v == 'super')
         {
           curClass.extend;
         }
@@ -365,9 +367,9 @@ class Typer
         {
           members.get(v);
         }
-        else if (curClass != null && curClass.extend != null && getFields(curClass.extend).fields.contains(v)) 
+        else if (curClass != null && curClass.extend != null && getFields(curClass.extend).hasField(v))
         {
-          builtin('Dynamic');
+          getFields(curClass.extend).getField(v).t;
         }
         else if (interp.variables.exists(v))
         {
@@ -484,23 +486,40 @@ class Typer
 
         te1 ??= typeExpr(e1);
 
+        var t:CType = builtin('Dynamic');
         if (!isDynamic(te1.t))
         {
-          var fields:Array<String> = [];
-          var isStatic:Bool = false;
           switch (te1.t)
           {
             case CTPath(['Class'], [p]) | CTPath(['Enum'], [p]):
-              fields = getFields(p)?.statics ?? error(e1, 'Could not get fields for type "${typeToString(p)}"');
-              isStatic = true;
+              var fields = getFields(p) ?? error(e1, 'Could not get fields for type "${typeToString(p)}"');
+              if (!fields.hasStatic(f))
+              {
+                if (fields.hasField(f)) error(e, 'Static access to instance field "${f}" from class "${typeToString(te1.t)}" is not allowed');
+                else
+                  error(e, '"${typeToString(te1.t)}" has no field "${f}"');
+              }
+              t = fields.getStatic(f).t;
             default:
-              fields = getFields(te1.t)?.fields ?? error(e1, 'Could not get fields for type "${typeToString(te1.t)}"');
-              isStatic = false;
+              var fields = getFields(te1.t) ?? error(e1, 'Could not get fields for type "${typeToString(te1.t)}"');
+              if (!fields.hasField(f))
+              {
+                if (fields.hasStatic(f)) error(e, 'Cannot access static field "${f}" from class instance "${typeToString(te1.t)}"');
+                else
+                  error(e, '"${typeToString(te1.t)}" has no field "${f}"');
+              }
+              t = fields.getField(f).t;
           }
-          if (!fields.contains(f)) error(e, '"${typeToString(te1.t)}" has no${isStatic ? ' static ' : ' instance '}field "${f}"');
+
+          switch (te1.e)
+          {
+            case TEIdent(v):
+              if (v == 'this') t = members.get(f) ?? t;
+            default:
+          }
         }
 
-        return buildTypedExpr(e, TEField(te1, f), builtin('Dynamic'));
+        return buildTypedExpr(e, TEField(te1, f), t);
 
       case EBinop(op, e1, e2):
         var te1:TypedExpr = typeExpr(e1);
@@ -850,7 +869,7 @@ class Typer
     }
   }
 
-  function getFields(t:CType):Null<{statics:Array<String>, fields:Array<String>}>
+  function getFields(t:CType):Null<TypeFields>
   {
     switch (t)
     {
@@ -859,27 +878,52 @@ class Typer
 
       case CTPath(path, _):
         var type:Dynamic = resolveType(path.join('.')) ?? return null;
-        if (Std.isOfType(type, Class)) return {statics: Type.getClassFields(type), fields: Type.getInstanceFields(type)};
-        if (Std.isOfType(type, Enum)) return {statics: Type.getEnumConstructs(type), fields: []};
+        if (Std.isOfType(type, Class))
+        {
+          var fields;
+          var statics;
+          if (Rtti.hasRtti(type))
+          {
+            var rtti = Rtti.getRtti(type);
+            fields = [
+              for (f in rtti.fields)
+                {n: f.name, t: convertRTypeToCType(f.type)}
+            ];
+            statics = [
+              for (f in rtti.statics)
+                {n: f.name, t: convertRTypeToCType(f.type)}
+            ];
+          }
+          else
+          {
+            fields = [for (f in Type.getInstanceFields(type)) {n: f, t: builtin('Dynamic')}];
+            statics = [for (f in Type.getClassFields(type)) {n: f, t: builtin('Dynamic')}];
+          }
+          return new TypeFields(fields, statics);
+        }
+        if (Std.isOfType(type, Enum))
+        {
+          return new TypeFields([], [for (f in Type.getEnumConstructs(type)) {n: f, t: builtin('Dynamic')}]);
+        }
         switch ((cast type : ModuleDecl))
         {
           case DClass(c):
             var superFields = c.extend != null ? getFields(c.extend) : null;
-            var statics:Array<String> = superFields?.statics ?? [];
-            var fields:Array<String> = superFields?.fields ?? [];
+            var fields = superFields?.fields ?? [];
+            var statics = superFields?.statics ?? [];
             for (f in c.fields)
-              f.access.contains(AStatic) ? statics.push(f.name) : fields.push(f.name);
-            return {statics: statics, fields: fields};
+              f.access.contains(AStatic) ? statics.push({n: f.name, t: builtin('Dynamic')}) : fields.push({n: f.name, t: builtin('Dynamic')});
+            return new TypeFields(fields, statics);
           case DTypedef(c):
             return getFields(c.t);
           case DEnum(e):
-            return {statics: [for (f in e.fields) f.name], fields: []};
+            return new TypeFields([], [for (f in e.fields) {n: f.name, t: builtin('Dynamic')}]);
           default:
         }
         return null;
 
       case CTAnon(fields):
-        return {statics: [], fields: [for (f in fields) f.name]};
+        return new TypeFields([for (f in fields) {n: f.name, t: builtin('Dynamic')}], []);
 
       case CTParent(t):
         return getFields(t);
@@ -892,6 +936,30 @@ class Typer
 
       default:
         return null;
+    }
+  }
+
+  function convertRTypeToCType(t:RType):CType
+  {
+    switch (t)
+    {
+      case CUnknown:
+        return builtin('Dynamic');
+      case CEnum(name, params) | CClass(name, params) | CTypedef(name, params) | CAbstract(name, params):
+        return CTPath(name.split('.'), params.length > 0 ? [for (p in params) convertRTypeToCType(p)] : null);
+      case CFunction(args, ret):
+        var cargs = [];
+        for (a in args)
+        {
+          var t = CTNamed(a.name, convertRTypeToCType(a.t));
+          if (a.opt) t = CTOpt(t);
+          cargs.push(t);
+        }
+        return CTFun(cargs, convertRTypeToCType(ret));
+      case CAnonymous(fields):
+        return CTAnon([for (f in fields) {name: f.name, t: convertRTypeToCType(f.type)}]);
+      case CDynamic(t):
+        return t != null ? CTPath(['Dynamic'], [convertRTypeToCType(t)]) : builtin('Dynamic');
     }
   }
 
@@ -1258,3 +1326,43 @@ typedef TyperModule =
   @:optional var code:String;
   @:optional var origin:String;
 };
+
+private class TypeFields
+{
+  public var fields(default, null):Array<{n:String, t:CType}>;
+  public var statics(default, null):Array<{n:String, t:CType}>;
+
+  public function new(fields, statics)
+  {
+    this.fields = fields;
+    this.statics = statics;
+  }
+
+  public function hasField(n:String):Bool
+  {
+    for (f in fields)
+      if (f.n == n) return true;
+    return false;
+  }
+
+  public function getField(n:String)
+  {
+    for (f in fields)
+      if (f.n == n) return f;
+    return null;
+  }
+
+  public function hasStatic(n:String):Bool
+  {
+    for (f in statics)
+      if (f.n == n) return true;
+    return false;
+  }
+
+  public function getStatic(n:String)
+  {
+    for (f in statics)
+      if (f.n == n) return f;
+    return null;
+  }
+}
