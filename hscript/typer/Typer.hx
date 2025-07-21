@@ -541,12 +541,20 @@ class Typer
         }
         if (isNullUnknown(te1.t)) te1.t = te2.t;
         else if (isNullUnknown(te2.t)) te2.t = te1.t;
-        var t:CType = ['==', '!='].contains(op) ? builtin('Bool') : commonType(te1.t, te2.t);
+        var t:CType = ['==', '!=', 'is'].contains(op) ? builtin('Bool') : commonType(te1.t, te2.t);
 
         if (!equalType(te1.t, te2.t) && !(isDynamic(te1.t) || isDynamic(te2.t)))
         {
-          if ((!isFloat(commonType(te1.t, te2.t)) && !equalType(te1.t, te2.t))
-            || (['=', '+=', '-=', '*=', '/='].contains(op) && isInt(te1.t)))
+          if (op == 'is')
+          {
+            switch (te2.t)
+            {
+              case CTPath(['Class'], [p1]):
+              default:
+                error(e2, 'Unsupported type for "is" operator: "${typeToString(te2.t)}"');
+            }
+          }
+          else if (!isFloat(commonType(te1.t, te2.t)) || (['=', '+=', '-=', '*=', '/='].contains(op) && isInt(te1.t)))
           {
             error(e2, '"${typeToString(te2.t)}" should be "${typeToString(te1.t)}"');
           }

@@ -32,6 +32,7 @@ class TestSuite extends Test
     assertPass('var ternary = true ? 1 : 0;');
     assertPass('var x:Null<Int> = 5;');
     assertPass('var y = true ? null : 5.2;');
+    assertPass('var type = 5 is Int;');
   }
 
   function assertPass(code:String):Void
